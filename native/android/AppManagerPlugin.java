@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.StatFs;
 import android.util.Base64;
+import android.util.Log;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -30,7 +31,9 @@ import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 应用管理插件：让前端能读取设备上真实安装的应用、启动它们、卸载它们，
@@ -46,6 +49,8 @@ import java.util.List;
  */
 @CapacitorPlugin(name = "AppManager")
 public class AppManagerPlugin extends Plugin {
+
+    private static final String TAG = "AppManagerPlugin";
 
     private BroadcastReceiver packageReceiver;
     private boolean watching = false;
@@ -107,11 +112,50 @@ public class AppManagerPlugin extends Plugin {
                     PackageManager pm = ctx.getPackageManager();
                     String self = ctx.getPackageName();
 
-                    @SuppressWarnings("deprecation")
-                    List<ApplicationInfo> infos = pm.getInstalledApplications(0);
+                    // 多来源合并再取并集。
+                    //
+                    // 背景：Android 11+ 有「包可见性」过滤，理论上声明 QUERY_ALL_PACKAGES
+                    // 就能看到全部应用；实测在 HyperOS 3 / Android 16 上授权 granted=true
+                    // 时 getInstalledApplications() 仍只返回应用自己，
+                    // 因此这里额外从「带启动入口的应用」补齐，哪个来源能用都不至于空列表。
+                    Map<String, ApplicationInfo> merged = new LinkedHashMap<String, ApplicationInfo>();
+
+                    int nInstalled = 0;
+                    try {
+                        @SuppressWarnings("deprecation")
+                        List<ApplicationInfo> direct = pm.getInstalledApplications(0);
+                        if (direct != null) {
+                            nInstalled = direct.size();
+                            for (ApplicationInfo ai : direct) {
+                                if (ai != null && ai.packageName != null) merged.put(ai.packageName, ai);
+                            }
+                        }
+                    } catch (Exception e) {
+                        Log.w(TAG, "getInstalledApplications 失败: " + e.getMessage());
+                    }
+
+                    int nLauncher = collectLaunchables(pm, Intent.CATEGORY_LAUNCHER, merged);
+                    int nLeanback = collectLaunchables(pm, Intent.CATEGORY_LEANBACK_LAUNCHER, merged);
+
+                    // 可见性探针：抽查几个常见包是否可见，用来判断是否被包可见性过滤
+                    String[] probePkgs = { "com.android.settings", "com.android.vending", "com.tencent.mm" };
+                    int probes = 0;
+                    for (String p : probePkgs) {
+                        try {
+                            pm.getPackageInfo(p, 0);
+                            probes++;
+                        } catch (Exception ignored) {
+                        }
+                    }
+
+                    Log.i(TAG, "应用来源统计: getInstalledApplications=" + nInstalled
+                            + ", launcher=" + nLauncher
+                            + ", leanback=" + nLeanback
+                            + ", 合并后=" + merged.size()
+                            + ", 可见性探针=" + probes + "/" + probePkgs.length);
 
                     JSArray arr = new JSArray();
-                    for (ApplicationInfo ai : infos) {
+                    for (ApplicationInfo ai : merged.values()) {
                         if (ai == null || ai.packageName == null) continue;
 
                         JSObject o = new JSObject();
@@ -157,15 +201,49 @@ public class AppManagerPlugin extends Plugin {
                         arr.put(o);
                     }
 
+                    JSObject diag = new JSObject();
+                    diag.put("installedApplications", nInstalled);
+                    diag.put("launcherActivities", nLauncher);
+                    diag.put("leanbackActivities", nLeanback);
+                    diag.put("merged", merged.size());
+                    diag.put("probes", probes);
+
                     JSObject ret = new JSObject();
                     ret.put("apps", arr);
                     ret.put("count", arr.length());
+                    ret.put("diag", diag);
                     resolveOnUi(call, ret);
                 } catch (Exception e) {
                     rejectOnUi(call, "读取应用列表失败: " + e.getMessage());
                 }
             }
         });
+    }
+
+    /**
+     * 把某个 Intent category 下所有能启动的应用并入 merged。
+     * 返回该 category 查到的条目数（用于诊断）。
+     */
+    private int collectLaunchables(PackageManager pm, String category,
+                                   Map<String, ApplicationInfo> merged) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_MAIN, null);
+            intent.addCategory(category);
+            @SuppressWarnings("deprecation")
+            List<ResolveInfo> list = pm.queryIntentActivities(intent, 0);
+            if (list == null) return 0;
+            for (ResolveInfo ri : list) {
+                if (ri == null || ri.activityInfo == null || ri.activityInfo.applicationInfo == null) continue;
+                ApplicationInfo ai = ri.activityInfo.applicationInfo;
+                if (ai.packageName != null && !merged.containsKey(ai.packageName)) {
+                    merged.put(ai.packageName, ai);
+                }
+            }
+            return list.size();
+        } catch (Exception e) {
+            Log.w(TAG, "queryIntentActivities(" + category + ") 失败: " + e.getMessage());
+            return 0;
+        }
     }
 
     /** 是否声明了 Leanback（Android TV）启动入口 */

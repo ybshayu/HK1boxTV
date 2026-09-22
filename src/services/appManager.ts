@@ -39,7 +39,12 @@ export interface RealStorage {
 }
 
 interface AppManagerNative {
-  listApps(): Promise<{ apps: InstalledApp[]; count: number }>;
+  listApps(): Promise<{
+    apps: InstalledApp[];
+    count: number;
+    /** 各来源数量统计，用于排查读不到应用的情况 */
+    diag?: Record<string, number>;
+  }>;
   getIcon(options: { packageName: string; size?: number }): Promise<{ packageName: string; dataUrl: string }>;
   launchApp(options: { packageName: string }): Promise<void>;
   uninstallApp(options: {
