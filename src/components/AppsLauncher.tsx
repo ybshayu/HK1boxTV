@@ -109,14 +109,14 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
     <div className="px-10 py-6 max-w-7xl mx-auto text-left">
       {/* Toast popup when app launched */}
       {launchedAppToast && (
-        <div className="fixed top-8 left-1/2 -translate-x-1/2 z-50 bg-neutral-900 border border-emerald-500/40 text-emerald-400 px-6 py-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-2 text-xs font-semibold animate-fade-in">
+        <div className="fixed top-8 left-1/2 -translate-x-1/2 z-50 bg-neutral-900 border border-emerald-500/40 text-emerald-400 px-6 py-3 rounded-2xl flex items-center gap-2 text-xs font-semibold animate-fade-in">
           <Play className="w-4 h-4 fill-current" />
           <span>{launchedAppToast}</span>
         </div>
       )}
 
       {/* Top Section: HK1 Box Storage Card */}
-      <div className="bg-neutral-900/80 border border-white/10 rounded-3xl p-6 mb-8 backdrop-blur-xl shadow-2xl">
+      <div className="bg-neutral-900/80 border border-white/10 rounded-3xl p-6 mb-8">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-sky-500/10 text-sky-400 flex items-center justify-center border border-sky-500/20">
@@ -272,7 +272,7 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
 
       {/* Confirmation Modal: Uninstall App */}
       {appToUninstall && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-neutral-900 border border-white/20 rounded-3xl p-6 shadow-2xl text-left">
             <div className="flex items-center gap-3 text-amber-400 mb-3">
               <AlertTriangle className="w-6 h-6" />
@@ -308,7 +308,7 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
 
       {/* Modal: Install/Add TV App */}
       {isInstallModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-neutral-900 border border-white/20 rounded-3xl p-6 shadow-2xl text-left">
             <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
               <Plus className="w-5 h-5 text-sky-400" />

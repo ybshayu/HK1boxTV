@@ -3,6 +3,7 @@ import { MediaItem, ChannelShelfConfig, PlaybackProgress, SupportedLanguage } fr
 import { translations } from '../i18n/translations';
 import { MediaPosterCard } from './MediaPosterCard';
 import { Play, Tv, Film, Bookmark, Radio, Sparkles, ChevronRight } from 'lucide-react';
+import { posterGradient } from '../utils/theme';
 
 interface HomeShelvesViewProps {
   mediaList: MediaItem[];
@@ -74,13 +75,15 @@ export const HomeShelvesView: React.FC<HomeShelvesViewProps> = ({
           <div
             id={`spotlight-hero-${spotlightMedia.id}`}
             onClick={() => onSelectMedia(spotlightMedia)}
-            className="group relative h-72 sm:h-80 md:h-96 w-full rounded-3xl overflow-hidden border border-white/15 cursor-pointer shadow-2xl transition-all duration-300 hover:border-white/40"
+            className="group relative h-72 sm:h-80 md:h-96 w-full rounded-3xl overflow-hidden border border-white/15 cursor-pointer"
+            style={{ background: posterGradient(spotlightMedia.id) }}
           >
-            {/* Backdrop Image */}
+            {/* 背景大图：底层垫渐变，图片未到位/失败时界面依然完整 */}
             <img
               src={spotlightMedia.backdrop}
               alt={spotlightMedia.title}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700"
+              className="w-full h-full object-cover"
+              decoding="async"
               referrerPolicy="no-referrer"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
@@ -92,7 +95,7 @@ export const HomeShelvesView: React.FC<HomeShelvesViewProps> = ({
                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500 text-black uppercase tracking-wider">
                   HOT 今日重磅精选
                 </span>
-                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/20 backdrop-blur-md text-white">
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/20 text-white">
                   {spotlightMedia.resolution}
                 </span>
                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/80 text-white">
@@ -130,9 +133,9 @@ export const HomeShelvesView: React.FC<HomeShelvesViewProps> = ({
                       e.stopPropagation();
                       onNavigateTab(1); // Jump to Live TV
                     }}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-rose-600/90 hover:bg-rose-500 text-white font-bold text-xs shadow-xl backdrop-blur-md border border-rose-400/40 hover:scale-105 active:scale-95 transition cursor-pointer"
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-rose-600/90 hover:bg-rose-500 text-white font-bold text-xs border border-rose-400/40 transition cursor-pointer"
                   >
-                    <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                    <span className="w-2 h-2 rounded-full bg-white" />
                     <Tv className="w-3.5 h-3.5" />
                     <span>📺 电视直播 (CCTV & 卫视)</span>
                   </button>
@@ -162,7 +165,7 @@ export const HomeShelvesView: React.FC<HomeShelvesViewProps> = ({
               <div className="text-left">
                 <div className="text-xs font-bold text-white flex items-center gap-1">
                   <span>电视直播</span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
                 </div>
                 <div className="text-[10px] text-white/50">央视/卫视 4K 秒开</div>
               </div>

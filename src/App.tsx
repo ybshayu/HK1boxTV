@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   MediaItem, 
   CustomVideoSource, 
@@ -13,6 +13,10 @@ import { mockMediaList } from './data/mockMedia';
 import { initialVideoSources } from './data/mockSources';
 import { initialTVApps, defaultStorageInfo } from './data/mockApps';
 import { translations } from './i18n/translations';
+import { ambientColor } from './utils/theme';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
+import { fetchM3U, ONLINE_SOURCE, toSource } from './services/iptv';
 
 // Components
 import { NavigationHeader } from './components/NavigationHeader';
@@ -35,6 +39,8 @@ export default function App() {
   // Media & Data State
   const [mediaList, setMediaList] = useState<MediaItem[]>(mockMediaList);
   const [sources, setSources] = useState<CustomVideoSource[]>(initialVideoSources);
+  const [isLoadingSources, setIsLoadingSources] = useState<boolean>(false);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [apps, setApps] = useState<TVApp[]>(initialTVApps);
   const [storage, setStorage] = useState<StorageInfo>(() => {
     const saved = localStorage.getItem('hk1_storage');
@@ -105,8 +111,8 @@ export default function App() {
   const [isCleaningCache, setIsCleaningCache] = useState<boolean>(false);
   const [hasUpdateNotification, setHasUpdateNotification] = useState<boolean>(true);
 
-  // Dynamic Background Backdrop (Apple TV / Infuse immersion)
-  const [activeBackdrop, setActiveBackdrop] = useState<string>(mockMediaList[0].backdrop);
+  // 轻量背景：只记录当前焦点内容的 id，氛围色由色相推导（不加载大图、不做模糊）
+  const [activeFocusId, setActiveFocusId] = useState<string>(mockMediaList[0]?.id || 'home');
 
   // Save Progress & Favorites to localStorage
   useEffect(() => {
@@ -121,14 +127,84 @@ export default function App() {
     localStorage.setItem('hk1_storage', JSON.stringify(storage));
   }, [storage]);
 
+  // 启动后真实拉取在线直播源；失败则保留内置兜底源并给出提示
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingSources(true);
+    setSourcesError(null);
+
+    fetchM3U(ONLINE_SOURCE.url)
+      .then((channels) => {
+        if (cancelled) return;
+        if (channels.length === 0) throw new Error('empty playlist');
+        setSources((prev) =>
+          prev.map((s) =>
+            s.id === ONLINE_SOURCE.id ? toSource(s.id, s.name, s.url, channels) : s
+          )
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSourcesError('在线源拉取失败，已切换为内置直播源');
+        setSources((prev) =>
+          prev.map((s) =>
+            s.id === ONLINE_SOURCE.id ? { ...s, status: 'offline' as const } : s
+          )
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingSources(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 把各视频源解析出的「真实频道」并入内容列表（替换掉演示用的假直播项）
+  const liveChannels = useMemo<MediaItem[]>(() => {
+    const out: MediaItem[] = [];
+    for (const s of sources) {
+      for (const ch of s.channels || []) {
+        out.push({
+          id: `live-${ch.id}`,
+          title: ch.name,
+          type: 'live',
+          category: 'live',
+          poster: ch.logo || '',
+          backdrop: '',
+          year: new Date().getFullYear(),
+          duration: '实时直播',
+          rating: 0,
+          genres: [ch.group || '直播'],
+          resolution: '1080P FHD',
+          hdrType: 'SDR',
+          audio: 'AAC 2.0',
+          streamUrl: ch.streamUrl,
+          synopsis: `直播频道「${ch.name}」，来自 ${s.name}`,
+          isCustomSource: true,
+          sourceName: s.name,
+        });
+      }
+    }
+    return out;
+  }, [sources]);
+
+  useEffect(() => {
+    setMediaList((prev) => [
+      ...prev.filter((m) => m.type !== 'live' && m.category !== 'live'),
+      ...liveChannels,
+    ]);
+  }, [liveChannels]);
+
   // Handle Focus Change
   const handleFocusItem = useCallback((id: string) => {
     setFocusedId(id);
     if (id.startsWith('card-')) {
       const mediaId = id.replace('card-', '');
       const found = mediaList.find((m) => m.id === mediaId);
-      if (found && found.backdrop) {
-        setActiveBackdrop(found.backdrop);
+      if (found) {
+        setActiveFocusId(found.id);
       }
     }
   }, [mediaList]);
@@ -160,18 +236,31 @@ export default function App() {
     });
   };
 
-  // Handle Deep Cache Clean
-  const handleCleanCache = () => {
+  // 真实清理：清空 CacheStorage 与 sessionStorage，并用真实用量回填
+  const handleCleanCache = async () => {
     setIsCleaningCache(true);
-    setTimeout(() => {
-      const cleanedAmount = storage.cacheMB;
-      setStorage((prev) => ({
-        ...prev,
-        cacheMB: 280, // minimal buffer
-        freeMB: prev.freeMB + (cleanedAmount - 280),
-      }));
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+      try {
+        sessionStorage.clear();
+      } catch {
+        /* 忽略 */
+      }
+
+      let cacheMB = 0;
+      if (navigator.storage?.estimate) {
+        const est = await navigator.storage.estimate();
+        cacheMB = Math.round((est.usage || 0) / 1048576);
+      }
+      setStorage((prev) => ({ ...prev, cacheMB }));
+    } catch {
+      /* 权限受限时静默 */
+    } finally {
       setIsCleaningCache(false);
-    }, 1400);
+    }
   };
 
   // Handle App Install & Uninstall
@@ -406,6 +495,33 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [focusedId, currentTab, activeMedia, playingMedia, isUpdateModalOpen, isReorderModalOpen, mediaList, detailFocusedBtn]);
 
+  // 性能模式：挂到 html[data-perf]，由 index.css 统一关闭高开销的模糊与循环动画
+  useEffect(() => {
+    document.documentElement.dataset.perf = isPerformanceMode ? 'on' : 'off';
+  }, [isPerformanceMode]);
+
+  // Android 返回键（遥控器 BACK 键）：交给 handleRemoteBack 处理，
+  // 否则 Capacitor WebView 会因单页应用无浏览历史而直接 finish() 退出整个应用。
+  const backHandlerRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    backHandlerRef.current = handleRemoteBack;
+  });
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let remove: (() => void) | undefined;
+    CapacitorApp.addListener('backButton', () => backHandlerRef.current())
+      .then((sub) => {
+        remove = () => sub.remove();
+      })
+      .catch(() => {
+        /* 非原生环境忽略 */
+      });
+    return () => {
+      if (remove) remove();
+    };
+  }, []);
+
   const favoritesSet = new Set(favorites);
 
   return (
@@ -419,16 +535,13 @@ export default function App() {
             : 'bg-[#0b0c10] text-white'
       }`}
     >
-      {/* Dynamic Immersive Blurred Backdrop (Apple TV & Infuse Aesthetic) */}
-      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden transition-opacity duration-700">
-        <img
-          src={activeBackdrop}
-          alt="Backdrop"
-          className="w-full h-full object-cover filter blur-[40px] opacity-25 scale-110 transition-all duration-700"
-          referrerPolicy="no-referrer"
+      {/* 轻量背景：纯 CSS 色相渐变，零模糊合成、零远程大图解码（对老盒子 GPU 友好） */}
+      <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden" aria-hidden="true">
+        <div
+          className="absolute inset-0 transition-colors duration-500"
+          style={{ backgroundColor: ambientColor(activeFocusId) }}
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-transparent to-black" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/75 to-black" />
       </div>
 
       {/* Main App Content Layout */}
@@ -478,7 +591,13 @@ export default function App() {
             <MediaGridView
               title="电视直播"
               categoryFilter="live"
-              subtitle="国内三大运营商 IPv6 直连 · 央视与各省卫视超高清广播频道 (点击即播)"
+              subtitle={
+                isLoadingSources
+                  ? '正在拉取在线直播源…'
+                  : sourcesError
+                  ? `${sourcesError} · 当前共 ${liveChannels.length} 个频道`
+                  : `已加载 ${liveChannels.length} 个直播频道 · 点击即播`
+              }
               mediaList={mediaList.filter((m) => m.type === 'live' || m.category === 'live')}
               progressMap={progressMap}
               favoritesSet={favoritesSet}
@@ -496,7 +615,7 @@ export default function App() {
             <MediaGridView
               title="全部电影"
               categoryFilter="movie"
-              subtitle="4K UHD 杜比视界高码率原盘与院线大片"
+              subtitle="演示内容（示例片源）· 接入真实点播源请前往「自定义源」"
               mediaList={mediaList.filter((m) => m.type === 'movie' || m.category === 'movie')}
               progressMap={progressMap}
               favoritesSet={favoritesSet}
@@ -515,7 +634,7 @@ export default function App() {
             <MediaGridView
               title="精品剧集"
               categoryFilter="series"
-              subtitle="热门美剧、国产硬核科幻与历史史诗"
+              subtitle="演示内容（示例片源）· 接入真实点播源请前往「自定义源」"
               mediaList={mediaList.filter((m) => m.type === 'series' || m.category === 'series')}
               progressMap={progressMap}
               favoritesSet={favoritesSet}

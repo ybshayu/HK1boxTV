@@ -58,7 +58,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         <img
           src={media.backdrop}
           alt={media.title}
-          className="w-full h-full object-cover scale-105 filter blur-[1px] opacity-40 transition-all duration-700"
+          className="w-full h-full object-cover opacity-30"
           referrerPolicy="no-referrer"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-black/30" />
@@ -70,7 +70,7 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
         <button
           id="detail-btn-back"
           onClick={onClose}
-          className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium bg-white/10 hover:bg-white/20 text-white backdrop-blur-md transition border border-white/15 cursor-pointer ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium bg-white/10 hover:bg-white/20 text-white transition border border-white/15 cursor-pointer ${
             focusedButtonIndex === -1 ? 'ring-2 ring-white bg-white text-black scale-105' : ''
           }`}
         >

@@ -45,6 +45,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [aspectRatio, setAspectRatio] = useState<'16-9' | 'fill' | 'original'>('16-9');
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [focusedControl, setFocusedControl] = useState<number>(0); // 0: Play/Pause, 1: Rewind, 2: Forward, 3: Speed, 4: Aspect, 5: NextEp
+  const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const controlsTimeoutRef = useRef<number | null>(null);
   const t = translations[language];
@@ -83,31 +85,51 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!video) return;
 
     let hls: Hls | null = null;
+    setLoadError(null);
+    setLoading(true);
+
+    const onReady = () => {
+      setLoading(false);
+      if (initialTime > 0) {
+        video.currentTime = initialTime;
+        setResumePrompt(`${t['player.resumePrompt']} ${formatSeconds(initialTime)}`);
+        setTimeout(() => setResumePrompt(null), 4000);
+      }
+      video.play().catch(() => setIsPlaying(false));
+    };
 
     if (activeStreamUrl.includes('.m3u8') && Hls.isSupported()) {
+      // 老设备（Android 9 盒子）worker 支持不稳定：主线程解析反而更可靠；
+      // 同时放宽低延迟模式并限制缓冲，降低内存与卡顿压力。
       hls = new Hls({
-        enableWorker: true,
-        lowLatencyMode: true,
+        enableWorker: false,
+        lowLatencyMode: false,
+        maxBufferLength: 20,
+        maxMaxBufferLength: 40,
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 3,
+        levelLoadingMaxRetry: 3,
+        fragLoadingMaxRetry: 3,
       });
       hls.loadSource(activeStreamUrl);
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (initialTime > 0) {
-          video.currentTime = initialTime;
-          setResumePrompt(`${t['player.resumePrompt']} ${formatSeconds(initialTime)}`);
-          setTimeout(() => setResumePrompt(null), 4000);
+      hls.on(Hls.Events.MANIFEST_PARSED, onReady);
+      hls.on(Hls.Events.ERROR, (_evt, data) => {
+        if (data.fatal) {
+          setLoading(false);
+          setLoadError(
+            data.type === Hls.ErrorTypes.NETWORK_ERROR
+              ? '网络无法连接该直播源（源可能已失效）'
+              : '该直播源暂时无法播放'
+          );
         }
-        video.play().catch(() => setIsPlaying(false));
       });
     } else {
       video.src = activeStreamUrl;
-      video.onloadedmetadata = () => {
-        if (initialTime > 0) {
-          video.currentTime = initialTime;
-          setResumePrompt(`${t['player.resumePrompt']} ${formatSeconds(initialTime)}`);
-          setTimeout(() => setResumePrompt(null), 4000);
-        }
-        video.play().catch(() => setIsPlaying(false));
+      video.onloadedmetadata = onReady;
+      video.onerror = () => {
+        setLoading(false);
+        setLoadError('该直播源暂时无法播放（地址可能已失效）');
       };
     }
 
@@ -247,11 +269,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Breakpoint Resume Toast Prompt */}
       {resumePrompt && (
-        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-40 bg-neutral-900/90 text-white px-5 py-2.5 rounded-full border border-sky-400/40 shadow-2xl backdrop-blur-md flex items-center gap-2.5 text-xs font-medium animate-bounce">
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-40 bg-neutral-900/90 text-white px-5 py-2.5 rounded-full border border-sky-400/40 flex items-center gap-2.5 text-xs font-medium">
           <RotateCcw className="w-4 h-4 text-sky-400" />
           <span>{resumePrompt}</span>
         </div>
       )}
+
+      {/* 加载中 / 播放失败提示：源失效时给出明确反馈，而不是一片黑屏 */}
+      {loadError ? (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 bg-neutral-900/95 border border-rose-500/50 text-white px-7 py-5 rounded-2xl text-center max-w-md">
+          <div className="text-rose-400 font-bold text-sm mb-1.5">无法播放</div>
+          <div className="text-xs text-white/70 leading-relaxed">{loadError}</div>
+          <div className="text-[11px] text-white/40 mt-3">可在「自定义源」中更换其他直播源</div>
+        </div>
+      ) : loading ? (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 text-white/70 text-xs">
+          正在连接直播源…
+        </div>
+      ) : null}
 
       {/* OSD TV Controls Overlay */}
       <div
@@ -265,7 +300,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <button
               id="player-exit-btn"
               onClick={onClose}
-              className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/15 transition cursor-pointer"
+              className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white border border-white/15 transition cursor-pointer"
               title="退出播放 (Esc)"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -291,7 +326,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   setIsMuted(!isMuted);
                 }
               }}
-              className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/15 cursor-pointer"
+              className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white border border-white/15 cursor-pointer"
             >
               {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
             </button>

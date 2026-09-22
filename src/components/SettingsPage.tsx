@@ -59,7 +59,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Language Selection */}
-        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6 backdrop-blur-md">
+        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6">
           <h3 className="text-sm font-bold uppercase tracking-wider text-white/70 flex items-center gap-2 mb-4">
             <Globe className="w-4 h-4 text-sky-400" />
             <span>{t['settings.language']}</span>
@@ -90,7 +90,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         </div>
 
         {/* Night Mode & Visual Themes */}
-        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6 backdrop-blur-md">
+        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6">
           <h3 className="text-sm font-bold uppercase tracking-wider text-white/70 flex items-center gap-2 mb-4">
             <Palette className="w-4 h-4 text-sky-400" />
             <span>{t['settings.theme']}</span>
@@ -123,7 +123,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         </div>
 
         {/* 60FPS Performance Mode & Channel Reordering */}
-        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6 backdrop-blur-md">
+        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6">
           <h3 className="text-sm font-bold uppercase tracking-wider text-white/70 flex items-center gap-2 mb-4">
             <Gauge className="w-4 h-4 text-emerald-400" />
             <span>电视盒子性能与布局</span>
@@ -170,7 +170,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         </div>
 
         {/* HK1 Box Hardware Specs */}
-        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6 backdrop-blur-md">
+        <div className="bg-neutral-900/70 border border-white/10 rounded-3xl p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-bold uppercase tracking-wider text-white/70 flex items-center gap-2">
               <Cpu className="w-4 h-4 text-sky-400" />
@@ -197,7 +197,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         </div>
 
         {/* Domestic Video Source & Douban Metadata Architecture */}
-        <div className="md:col-span-2 bg-neutral-900/70 border border-white/10 rounded-3xl p-6 backdrop-blur-md">
+        <div className="md:col-span-2 bg-neutral-900/70 border border-white/10 rounded-3xl p-6">
           <h3 className="text-sm font-bold uppercase tracking-wider text-white/70 flex items-center gap-2 mb-3">
             <Globe className="w-4 h-4 text-emerald-400" />
             <span>🇨🇳 国内使用环境适配架构说明（免代理 / 零死链）</span>

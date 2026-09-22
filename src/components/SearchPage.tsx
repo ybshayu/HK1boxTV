@@ -122,7 +122,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Left: TV Virtual D-pad Alphabet Keyboard */}
-        <div className="lg:col-span-4 bg-neutral-900/60 border border-white/10 rounded-3xl p-5 backdrop-blur-md">
+        <div className="lg:col-span-4 bg-neutral-900/60 border border-white/10 rounded-3xl p-5">
           <div className="text-xs font-semibold uppercase tracking-wider text-white/60 mb-3 flex items-center justify-between">
             <span>遥控器全键盘</span>
             <span className="text-[10px] text-sky-400 font-mono">D-PAD 导航输入</span>

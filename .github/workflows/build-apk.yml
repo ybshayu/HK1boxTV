@@ -79,6 +79,17 @@ jobs:
           fi
           npx cap sync android
 
+      - name: 允许明文 HTTP 流量（大量 IPTV 源为 http://）
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if grep -q 'usesCleartextTraffic' "$MANIFEST"; then
+            echo "已存在 usesCleartextTraffic，跳过注入"
+          else
+            sed -i 's|<application|<application android:usesCleartextTraffic="true"|' "$MANIFEST"
+            echo "已注入 android:usesCleartextTraffic=\"true\""
+          fi
+          grep -o 'usesCleartextTraffic="[^"]*"' "$MANIFEST" || echo "警告：未找到 usesCleartextTraffic"
+
       - name: 注入 release 签名配置 (build.gradle)
         run: python3 scripts/patch-android-signing.py
 

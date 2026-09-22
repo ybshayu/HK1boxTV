@@ -22,7 +22,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({ onClose, l
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
       <div className="w-full max-w-lg bg-neutral-900 border border-white/20 rounded-3xl p-6 shadow-2xl text-left">
         <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
           <div className="flex items-center gap-2 text-amber-400">
@@ -39,7 +39,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({ onClose, l
 
         {isCompleted ? (
           <div className="py-6 text-center space-y-3">
-            <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto animate-bounce" />
+            <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
             <h4 className="text-base font-bold text-white">升级包已就绪！</h4>
             <p className="text-xs text-white/70 max-w-sm mx-auto leading-relaxed">
               {t['update.updated']}
@@ -68,7 +68,7 @@ export const UpdatePromptModal: React.FC<UpdatePromptModalProps> = ({ onClose, l
                   <span>78%</span>
                 </div>
                 <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 animate-pulse w-3/4" />
+                  <div className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 w-3/4" />
                 </div>
               </div>
             )}

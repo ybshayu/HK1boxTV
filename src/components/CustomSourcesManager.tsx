@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CustomVideoSource, SupportedLanguage, MediaItem } from '../types';
 import { translations } from '../i18n/translations';
+import { fetchM3U, toSource } from '../services/iptv';
 import { 
   Radio, 
   Plus, 
@@ -39,45 +40,57 @@ export const CustomSourcesManager: React.FC<CustomSourcesManagerProps> = ({
   const [newUrl, setNewUrl] = useState<string>('');
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<'success' | 'failed' | null>(null);
+  const [testMessage, setTestMessage] = useState<string>('');
 
   const t = translations[language];
 
   const selectedSource = sources.find((s) => s.id === selectedSourceId) || sources[0];
 
-  const handleTestConnection = () => {
+  // 真实测试：拉取并解析该地址，能解析出频道才算通（不再是假的 setTimeout）
+  const handleTestConnection = async () => {
     if (!newUrl) return;
     setIsTesting(true);
     setTestResult(null);
-    setTimeout(() => {
-      setIsTesting(false);
+    setTestMessage('');
+    const started = Date.now();
+    try {
+      const channels = await fetchM3U(newUrl, 12000);
+      if (channels.length === 0) throw new Error('empty');
       setTestResult('success');
-    }, 900);
+      setTestMessage(`解析成功：${channels.length} 个频道（${Date.now() - started}ms）`);
+    } catch {
+      setTestResult('failed');
+      setTestMessage('连接失败：无法拉取或解析该地址');
+    } finally {
+      setIsTesting(false);
+    }
   };
 
-  const handleSaveSource = (e: React.FormEvent) => {
+  // 真实保存：解析出频道后才入库，避免存下一个空壳源
+  const handleSaveSource = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName || !newUrl) return;
 
-    const newSource: CustomVideoSource = {
-      id: `src-${Date.now()}`,
-      name: newName,
-      type: newType,
-      url: newUrl,
-      channelCount: Math.floor(Math.random() * 20) + 10,
-      status: 'online',
-      lastUpdated: new Date().toISOString().split('T')[0],
-      channels: [
-        { id: `ch-${Date.now()}-1`, name: `${newName} - 4K 演示主频道`, group: '精选', streamUrl: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8' },
-        { id: `ch-${Date.now()}-2`, name: `${newName} - 高清副频道`, group: '精选', streamUrl: 'https://sf1-cdn-tos.huoshanstatic.com/obj/media-fe/xgplayer_doc_video/mp4/xgplayer-demo-720p.mp4' },
-      ],
-    };
-
-    onAddSource(newSource);
-    setSelectedSourceId(newSource.id);
-    setIsAddModalOpen(false);
-    setNewName('');
-    setNewUrl('');
+    setIsTesting(true);
     setTestResult(null);
+    setTestMessage('');
+    try {
+      const channels = await fetchM3U(newUrl, 15000);
+      if (channels.length === 0) throw new Error('empty');
+      const src = toSource(`src-${Date.now()}`, newName, newUrl, channels, newType);
+      onAddSource(src);
+      setSelectedSourceId(src.id);
+      setIsAddModalOpen(false);
+      setNewName('');
+      setNewUrl('');
+      setTestResult(null);
+      setTestMessage('');
+    } catch {
+      setTestResult('failed');
+      setTestMessage('保存失败：该地址解析不出频道，请检查链接是否可用');
+    } finally {
+      setIsTesting(false);
+    }
   };
 
   return (
@@ -144,9 +157,25 @@ export const CustomSourcesManager: React.FC<CustomSourcesManagerProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <span className="flex items-center gap-1 text-[11px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      在线
+                    <span
+                      className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${
+                        src.status === 'online'
+                          ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                          : src.status === 'checking'
+                          ? 'text-amber-300 bg-amber-500/10 border-amber-500/20'
+                          : 'text-rose-400 bg-rose-500/10 border-rose-500/20'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          src.status === 'online'
+                            ? 'bg-emerald-400'
+                            : src.status === 'checking'
+                            ? 'bg-amber-300'
+                            : 'bg-rose-400'
+                        }`}
+                      />
+                      {src.status === 'online' ? '在线' : src.status === 'checking' ? '检查中' : '离线'}
                     </span>
                     {sources.length > 1 && (
                       <button
@@ -291,40 +320,40 @@ export const CustomSourcesManager: React.FC<CustomSourcesManagerProps> = ({
 
               {/* Domestic Quick Presets */}
               <div className="pt-1">
-                <div className="text-[11px] font-semibold text-sky-400 mb-1.5">🇨🇳 国内常用源一键填入：</div>
+                <div className="text-[11px] font-semibold text-sky-400 mb-1.5">🇨🇳 实测可用源一键填入：</div>
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     onClick={() => {
-                      setNewName('央视与卫视超高清 (IPv6免翻墙)');
+                      setNewName('iptv-org 中国频道');
                       setNewType('m3u');
-                      setNewUrl('https://live.fanmingming.com/tv/m3u/ipv6.m3u');
+                      setNewUrl('https://iptv-org.github.io/iptv/countries/cn.m3u');
                     }}
                     className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 text-[11px] border border-white/10 cursor-pointer"
                   >
-                    央视卫视 IPv6
+                    iptv-org 中国源
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      setNewName('饭太硬国内 TVBox 聚合多仓');
-                      setNewType('vod_json');
-                      setNewUrl('http://饭太硬.top/tv');
+                      setNewName('iptv-org 全球频道');
+                      setNewType('m3u');
+                      setNewUrl('https://iptv-org.github.io/iptv/index.m3u');
                     }}
                     className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 text-[11px] border border-white/10 cursor-pointer"
                   >
-                    饭太硬 TVBox 源
+                    iptv-org 全球源
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      setNewName('局域网 AList (阿里云盘/夸克)');
-                      setNewType('webdav');
-                      setNewUrl('http://192.168.1.100:5244/dav');
+                      setNewName('央视官方 CCTV+ 源');
+                      setNewType('m3u');
+                      setNewUrl('https://cd-live-stream.news.cctvplus.com/live/smil:CHANNEL1.smil/playlist.m3u8');
                     }}
                     className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 text-[11px] border border-white/10 cursor-pointer"
                   >
-                    AList WebDAV
+                    央视官方 m3u8
                   </button>
                 </div>
               </div>
@@ -344,7 +373,13 @@ export const CustomSourcesManager: React.FC<CustomSourcesManagerProps> = ({
                 {testResult === 'success' && (
                   <span className="flex items-center gap-1 text-xs text-emerald-400 font-semibold">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>源可正常解析 (响应 42ms)</span>
+                    <span>{testMessage}</span>
+                  </span>
+                )}
+                {testResult === 'failed' && (
+                  <span className="flex items-center gap-1 text-xs text-rose-400 font-semibold">
+                    <XCircle className="w-4 h-4" />
+                    <span>{testMessage}</span>
                   </span>
                 )}
               </div>

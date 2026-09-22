@@ -74,7 +74,7 @@ export const NavigationHeader: React.FC<NavigationHeaderProps> = ({
       </div>
 
       {/* Navigation Pills (Apple TV style sliding bar) */}
-      <nav className="flex items-center bg-white/5 p-1.5 rounded-full border border-white/10 backdrop-blur-md shadow-2xl">
+      <nav className="flex items-center bg-white/5 p-1.5 rounded-full border border-white/10">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = currentTab === item.id;
@@ -96,10 +96,10 @@ export const NavigationHeader: React.FC<NavigationHeaderProps> = ({
               <Icon className={`w-3.5 h-3.5 ${isFocused ? 'text-black' : isActive ? (item.isLive ? 'text-rose-400' : 'text-sky-400') : 'text-white/60'}`} />
               <span className="whitespace-nowrap">{item.label}</span>
               {item.isLive && (
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
               )}
               {item.id === 8 && hasUpdateNotification && (
-                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping absolute top-1.5 right-2" />
+                <span className="w-2 h-2 rounded-full bg-amber-400 absolute top-1.5 right-2" />
               )}
             </button>
           );
@@ -112,7 +112,7 @@ export const NavigationHeader: React.FC<NavigationHeaderProps> = ({
           <button
             id="nav-ota-update-badge-btn"
             onClick={onOpenUpdateModal}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition text-[11px] animate-pulse cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition text-[11px] cursor-pointer"
           >
             <Bell className="w-3.5 h-3.5" />
             <span>v2.5.0 OTA</span>

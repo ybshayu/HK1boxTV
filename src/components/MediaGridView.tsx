@@ -105,7 +105,7 @@ export const MediaGridView: React.FC<MediaGridViewProps> = ({
 
         {/* Favorites Sub-Type Segmented Tabs */}
         {isFavoritesPage && (
-          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-white/10 border border-white/10 backdrop-blur-md">
+          <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-white/10 border border-white/10">
             <button
               onClick={() => { setFavoriteTypeFilter('all'); setSelectedGenre('全部'); }}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${

@@ -34,22 +34,35 @@
 }
 
 /* tvOS style smooth focus transitions */
+/* 焦点动效：TV 盒子 GPU 弱 → 只保留 transform + 单层描边，去掉多层大阴影与 will-change */
 .tv-focusable {
-  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), 
-              box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1),
-              border-color 0.2s ease,
-              background-color 0.2s ease;
-  will-change: transform, box-shadow;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.18s ease,
+              background-color 0.18s ease;
 }
 
 .tv-focus-active {
-  transform: scale(1.06) translateY(-4px);
-  box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.7), 0 0 0 3px #ffffff, 0 0 24px rgba(255, 255, 255, 0.35);
+  transform: scale(1.05);
+  box-shadow: 0 0 0 3px #ffffff;
   z-index: 20;
 }
 
 .tv-focus-glow {
-  box-shadow: 0 0 30px rgba(99, 102, 241, 0.45), 0 0 0 2px #818cf8;
+  box-shadow: 0 0 0 2px #818cf8;
+}
+
+/* 性能模式（默认开启）：禁用高开销的模糊与无限动画，保证老盒子流畅
+   注意：这里用 !important 覆盖 Tailwind 的 backdrop-blur-* / animate-* 工具类 */
+html[data-perf='on'] .perf-blur,
+html[data-perf='on'] [class*='backdrop-blur'] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html[data-perf='on'] .perf-loop-anim,
+html[data-perf='on'] .animate-ping,
+html[data-perf='on'] .animate-pulse,
+html[data-perf='on'] .animate-bounce {
+  animation: none !important;
 }
 
 /* Smooth text clipping */
