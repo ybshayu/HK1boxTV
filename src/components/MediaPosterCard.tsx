@@ -33,6 +33,8 @@ export const MediaPosterCard: React.FC<MediaPosterCardProps> = ({
       onClick={() => onSelect(media)}
       onMouseEnter={() => onFocusItem(`card-${media.id}`)}
       className="flex-shrink-0 cursor-pointer text-left focus:outline-none"
+      // 大列表（如 150 个直播频道）跳过屏外元素的渲染与绘制，显著降低老设备开销
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '176px 300px' }}
     >
       <div
         className={`relative w-44 h-64 sm:w-48 sm:h-72 rounded-2xl overflow-hidden tv-focusable border ${
