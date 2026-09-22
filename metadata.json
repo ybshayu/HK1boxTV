@@ -1,0 +1,6 @@
+{
+  "name": "HK1 Box TV 桌面",
+  "description": "专为HK1 Box等电视盒子打造的轻量级极简TVOS桌面与影视中心，支持遥控器D-pad导航、Infuse美学海报墙、自定义视频源、断点续传与存储管理。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

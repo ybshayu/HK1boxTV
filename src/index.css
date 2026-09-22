@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  body {
+    background-color: #08080a;
+    color: #f3f4f6;
+    overflow-x: hidden;
+    overflow-y: hidden;
+    font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  }
+
+  /* TV screen safe area margins (avoid overscan distortion on CRT/LCD TV displays) */
+  .tv-safe-area {
+    padding-left: clamp(24px, 4vw, 48px);
+    padding-right: clamp(24px, 4vw, 48px);
+    padding-top: clamp(20px, 3vh, 36px);
+    padding-bottom: clamp(20px, 3vh, 36px);
+  }
+}
+
+/* Hide scrollbars for clean TV interface */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* tvOS style smooth focus transitions */
+.tv-focusable {
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), 
+              box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.2s ease,
+              background-color 0.2s ease;
+  will-change: transform, box-shadow;
+}
+
+.tv-focus-active {
+  transform: scale(1.06) translateY(-4px);
+  box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.7), 0 0 0 3px #ffffff, 0 0 24px rgba(255, 255, 255, 0.35);
+  z-index: 20;
+}
+
+.tv-focus-glow {
+  box-shadow: 0 0 30px rgba(99, 102, 241, 0.45), 0 0 0 2px #818cf8;
+}
+
+/* Smooth text clipping */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
