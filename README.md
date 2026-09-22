@@ -70,8 +70,8 @@ cd HK1boxTV
 
 # 2. 安装依赖（二选一）
 bun install        # 推荐：与 bun.lock 完全匹配
-# 或
-npm install
+# 或（npm 请注意：vite@8 与 esbuild 存在 peer 冲突，需加 --legacy-peer-deps）
+npm install --legacy-peer-deps
 
 # 3. 启动开发服务器（默认端口 3000，已开启局域网访问）
 npm run dev
@@ -150,34 +150,37 @@ Android 系统不能直接安装网页，必须把它"包"进一个安卓壳子�
 
 > 优点：零成本。缺点：本质还是网页，重启/断网可能丢失入口，体验不如真 App。
 
-### 9.3 方案 B：Capacitor 封装为 APK（推荐）
+### 9.3 方案 B：Capacitor 封装为 APK（推荐，本仓库已配置 ✅）
 
+本仓库**已经是一个配好 Capacitor 的工程**：`capacitor.config.ts` + 已提交的 `android/` 原生工程 + 签名配置一应俱全。
 Capacitor 会把 `dist/` 网页塞进 Android 的 WebView，生成一个可安装的 APK。
 
 ```bash
 # 1. 先构建网页
 npm run build
 
-# 2. 安装 Capacitor
-npm install @capacitor/core @capacitor/cli @capacitor/android
+# 2. 同步网页资源到安卓工程（每次改了前端都要跑）
+npm run cap:sync
 
-# 3. 初始化（包名自定，例如 com.hk1boxtv.app）
-npx cap init "HK1 Box TV" com.hk1boxtv.app --web-dir=dist
-
-# 4. 添加 Android 平台（会生成 android/ 原生工程目录）
-npx cap add android
-
-# 5. 同步网页资源到安卓工程
-npx cap sync
-
-# 6. 用 Android Studio 打开 android/ 目录，点 Build → Build Bundle(s) / APK(s) → Build APK
-# 或命令行（需先在本地装好 Android SDK）：
-cd android && ./gradlew assembleDebug
+# 3. 本地打包（需先装好 Android SDK + JDK 17）
+cd android
+./gradlew assembleDebug        # 测试版（免签名，可直接 adb install）
+./gradlew assembleRelease      # 正式版（有签名密钥时自动签名）
 ```
 
-生成的 `android/app/build/outputs/apk/debug/app-debug.apk` 即可通过 `adb install` 装到盒子。
+产物位置：
+- `android/app/build/outputs/apk/debug/app-debug.apk`
+- `android/app/build/outputs/apk/release/app-release.apk`
 
-> 想要发布版（release）签名 APK，需在 Android Studio 里配置签名密钥（keystore）。
+装到盒子：`adb connect <盒子IP>:5555 && adb install android/app/build/outputs/apk/debug/app-debug.apk`
+
+> 📺 已针对 Android TV 优化：`AndroidManifest.xml` 加了 `LEANBACK_LAUNCHER`（出现在电视主页）、
+> TV banner 横幅图标、`NoTitleBar` 全屏主题，遥控器 D-pad 事件由 WebView 自动转成键盘事件，与网页版操作一致。
+
+#### 关于"和线上版 hk1-box-tv.ai.studio 保持一致"
+本仓库就是该线上站点的同源前端代码，且**没有任何构建期注入的密钥会改变界面**
+（`GEMINI_API_KEY` / `APP_URL` 在代码里未被消费，AI 功能当前 UI 未默认启用）。
+因此用同一份源码构建出的 APK，界面与功能与线上版完全一致。
 
 ### 9.4 方案 C：TWA / Bubblewrap（官方可信 Web 活动）
 
@@ -191,62 +194,58 @@ bubblewrap init --manifest https://你的网址/manifest.json
 bubblewrap build
 ```
 
+> 一般用户走方案 B（Capacitor）即可，无需 PWA。
+
 ---
 
-## 十、在 GitHub 上自动构建 APK（GitHub Actions）
+## 十、在 GitHub 上自动构建并发布 APK（已配置 ✅）
 
-如果你希望**每次打 tag 就自动在 GitHub 云端构建出 APK**，可在仓库新建
-`.github/workflows/build-apk.yml`（以下为 Capacitor 方案模板，需自行按环境微调）：
+本仓库已包含完整的自动化构建流程：`.github/workflows/build-apk.yml`。
+它通过 **GitHub Actions 云端**构建，**不需要你本地装 Android SDK**。
 
-```yaml
-name: Build Android APK
-on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+### 10.1 你会拿到什么
+- **debug 版 APK**：始终生成，免签名、可直接 `adb install` 到盒子测试。
+- **release 签名版 APK**：当你在仓库配置了签名密钥 Secrets 后自动生成（见 10.3）。
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+### 10.2 怎么触发构建
+两种办法：
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install & Build Web
-        run: |
-          npm install
-          npm run build
-
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Capacitor Build APK
-        run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/android
-          npx cap init "HK1 Box TV" com.hk1boxtv.app --web-dir=dist
-          npx cap add android
-          npx cap sync
-          cd android && ./gradlew assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: hk1boxtv-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+**方法一：打 tag（推荐，会自动发 Release）**
+```bash
+git tag v1.0.0
+git push origin v1.0.0
 ```
+GitHub 会自动构建，并在仓库 `Releases` 页面生成带 APK 的发布。
 
-> 说明：该模板产出 **debug 版 APK**（无需签名即可安装测试）。
-> 若要 release 签名版，需把 keystore 与密码存入仓库 `Settings → Secrets`，并在 Gradle 中配置签名。
-> CI 中 `npx cap add android` 偶尔需联网拉取模板，若失败可改为先在本地生成 `android/` 并提交到仓库。
+**方法二：手动触发**
+仓库 `Actions → Build Android APK → Run workflow`，可选 `debug` 或 `release`，
+构建完成后在 `Actions` 页面的 `Artifacts` 里下载 APK。
+
+### 10.3 配置 release 签名（一次性，强烈建议）
+要让线上发布的是**你自己签名的正式版**，需准备一把密钥并存入仓库 Secrets：
+
+1. **生成密钥库**（在你的电脑上，任意目录）：
+   ```bash
+   keytool -genkey -v -keystore release-key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias hk1boxtv
+   ```
+   牢记设置的**密钥库密码**与**别名(hk1boxtv)密码**。
+
+2. **把密钥库转成 base64 字符串**：
+   - macOS/Linux：`base64 -i release-key.jks -o keystore.b64 && cat keystore.b64`
+   - Windows PowerShell：`[Convert]::ToBase64String([IO.File]::ReadAllBytes("release-key.jks"))`
+
+3. **在 GitHub 仓库添加 4 个 Secrets**（`Settings → Secrets and variables → Actions → New repository secret`）：
+   | Secret 名称 | 值 |
+   | --- | --- |
+   | `ANDROID_KEYSTORE_BASE64` | 上面的 base64 整串 |
+   | `ANDROID_KEYSTORE_PASSWORD` | 密钥库密码 |
+   | `ANDROID_KEY_ALIAS` | `hk1boxtv` |
+   | `ANDROID_KEY_PASSWORD` | 别名密码（通常与密钥库密码相同） |
+
+4. 之后打 tag 触发构建，`app-release.apk` 即为你自己签名的正式版。
+   > 若未配置 Secrets，release 构建会**自动回退使用 debug 签名**（仍可安装），不会失败。
+
+> 🔒 密钥库文件（`*.jks`）**绝不入库**（已在 `.gitignore` 忽略）。一旦泄露，去仓库 Secrets 删掉重生成即可。
 
 ---
 
@@ -255,12 +254,22 @@ jobs:
 ```
 HK1boxTV/
 ├── index.html              # 入口 HTML
-├── package.json            # 依赖与脚本
+├── package.json            # 依赖与脚本（含 cap:sync 等）
+├── capacitor.config.ts     # Capacitor 配置（包名 / 资源目录）✅新增
 ├── vite.config.ts          # Vite 配置（含 Tailwind 插件）
 ├── tsconfig.json           # TypeScript 配置
 ├── .env.example            # 环境变量示例
 ├── metadata.json           # AI Studio 应用元信息
 ├── bun.lock                # bun 锁文件
+├── .github/
+│   └── workflows/
+│       └── build-apk.yml   # GitHub Actions 自动构建 APK ✅新增
+├── android/                # Capacitor 安卓原生工程（由 CI 或本地 `npx cap add android` 生成，未入库以减小体积）
+│   ├── app/
+│   │   └── build.gradle    # 构建时由 scripts/patch-android-signing.py 注入 release 签名配置
+│   └── gradlew
+├── scripts/
+│   └── patch-android-signing.py  # CI 中为 build.gradle 注入签名配置
 └── src/
     ├── main.tsx            # React 入口
     ├── App.tsx             # 主应用（导航 / 状态 / 遥控器逻辑）

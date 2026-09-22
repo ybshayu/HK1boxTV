@@ -6,3 +6,14 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# === Capacitor / Android ===
+android/.gradle/
+android/app/build/
+android/build/
+android/captures/
+android/local.properties
+# 签名密钥库：绝不可提交！
+*.jks
+*.keystore
+android/app/release-key.jks

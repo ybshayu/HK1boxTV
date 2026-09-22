@@ -1,0 +1,118 @@
+name: Build Android APK
+
+on:
+  # 推送形如 v1.0.0 / v1.2.3 的 tag 时，自动构建并发布 Release（含 APK）
+  push:
+    tags:
+      - 'v*'
+  # 允许手动触发：可选 debug（测试版）或 release（签名正式版）
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+permissions:
+  contents: write   # 用于发布 Release
+
+jobs:
+  build:
+    name: Build APK (Capacitor + Android)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装前端依赖
+        # 项目锁了 esbuild@^0.25，而 vite@8 要求 esbuild@^0.27+，npm 严格校验会冲突，需 legacy-peer-deps
+        run: npm install --legacy-peer-deps
+
+      - name: 构建网页 (dist/)
+        run: npm run build
+
+      - name: 设置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 Android 构建依赖
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: 生成安卓原生工程 (Capacitor)
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: 注入 release 签名配置 (build.gradle)
+        run: python scripts/patch-android-signing.py
+
+      - name: 还原签名密钥 (如配置了 Secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "检测到签名密钥，写入 release-key.jks"
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release-key.jks
+            echo "KEYSTORE_FILE=android/app/release-key.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "未配置签名密钥，release 将回退使用 debug 签名（仍可安装测试）"
+          fi
+
+      - name: 赋予 gradlew 执行权限
+        run: chmod +x android/gradlew
+
+      - name: 构建 APK
+        env:
+          KEYSTORE_FILE: ${{ env.KEYSTORE_FILE }}
+          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
+        run: |
+          cd android
+          if [ "${{ github.event.inputs.build_type }}" = "debug" ]; then
+            ./gradlew assembleDebug
+          else
+            ./gradlew assembleDebug assembleRelease
+          fi
+
+      - name: 上传 APK 为构建产物 (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: HK1-Box-TV-APK
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: ignore
+
+      - name: 发布 Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: HK1 Box TV ${{ github.ref_name }}
+          files: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release.apk
+          generate_release_notes: true
