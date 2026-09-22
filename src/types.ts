@@ -73,10 +73,16 @@ export interface TVApp {
   name: string;
   packageName: string;
   icon: string;
+  /** 真实应用图标（原生取回的 base64 dataURL）；为空时回退到内置图标 */
+  iconUrl?: string;
   sizeMB: number;
   version: string;
   category: 'media' | 'tools' | 'games' | 'system';
   isSystem?: boolean;
+  /** 是否能在启动器里打开（系统组件通常没有启动入口） */
+  launchable?: boolean;
+  /** 是否是本应用自身（不允许自杀式卸载） */
+  isSelf?: boolean;
 }
 
 export interface StorageInfo {

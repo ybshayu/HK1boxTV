@@ -93,6 +93,12 @@ jobs:
       - name: 注入豆瓣海报 Referer 处理（原生 WebViewClient）
         run: python3 scripts/patch-android-webview.py
 
+      # 应用库需要读取设备真实已装应用 / 图标 / 卸载，这些能力只能由原生提供。
+      # 注意顺序：必须在本步之前跑过 patch-android-webview.py（它注入 onCreate），
+      # 本步会把 registerPlugin 插到该 onCreate 的 super.onCreate 之前。
+      - name: 注入应用管理插件（读取/启动/卸载已装应用）
+        run: python3 scripts/patch-android-apps.py
+
       - name: 注入 release 签名配置 (build.gradle)
         run: python3 scripts/patch-android-signing.py
 

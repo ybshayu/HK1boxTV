@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { 
   MediaItem, 
   CustomVideoSource, 
-  TVApp, 
   StorageInfo, 
   PlaybackProgress, 
   ChannelShelfConfig, 
@@ -11,13 +10,14 @@ import {
 } from './types';
 import { mockMediaList } from './data/mockMedia';
 import { initialVideoSources } from './data/mockSources';
-import { initialTVApps, defaultStorageInfo } from './data/mockApps';
+import { defaultStorageInfo } from './data/mockApps';
 import { translations } from './i18n/translations';
 import { ambientColor } from './utils/theme';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { fetchM3U, ONLINE_SOURCE, toSource } from './services/iptv';
 import { useDouban } from './hooks/useDouban';
+import { useInstalledApps } from './hooks/useInstalledApps';
 import { doubanListToMedia } from './utils/mediaMapper';
 import { MOVIE_LISTS, SERIES_LISTS } from './services/douban';
 import { useDeviceMode } from './hooks/useDeviceMode';
@@ -46,11 +46,12 @@ export default function App() {
   const [sources, setSources] = useState<CustomVideoSource[]>(initialVideoSources);
   const [isLoadingSources, setIsLoadingSources] = useState<boolean>(false);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
-  const [apps, setApps] = useState<TVApp[]>(initialTVApps);
-  const [storage, setStorage] = useState<StorageInfo>(() => {
-    const saved = localStorage.getItem('hk1_storage');
-    return saved ? JSON.parse(saved) : defaultStorageInfo;
-  });
+  // 应用库：读取设备「真实」已安装应用（走原生插件），
+  // 并在系统安装 / 卸载 / 更新后自动刷新（广播 + 回前台双保险）
+  const installed = useInstalledApps(currentTab === 5);
+  const apps = installed.apps;
+  // 真实存储信息优先；浏览器预览（无原生能力）时退回占位数据
+  const storage: StorageInfo = installed.storageInfo ?? defaultStorageInfo;
 
   // Playback Progress (Breakpoint Resume)
   const [progressMap, setProgressMap] = useState<Record<string, PlaybackProgress>>(() => {
@@ -132,9 +133,7 @@ export default function App() {
     localStorage.setItem('hk1_favorites', JSON.stringify(favorites));
   }, [favorites]);
 
-  useEffect(() => {
-    localStorage.setItem('hk1_storage', JSON.stringify(storage));
-  }, [storage]);
+  // 存储信息来自原生实时统计，不再本地持久化（持久化会造成读到过期的假数据）
 
   // 启动后真实拉取在线直播源；失败则保留内置兜底源并给出提示
   useEffect(() => {
@@ -341,7 +340,7 @@ export default function App() {
     });
   };
 
-  // 真实清理：清空 CacheStorage 与 sessionStorage，并用真实用量回填
+  // 真实清理：清空 CacheStorage 与 sessionStorage，然后重新拉取原生统计
   const handleCleanCache = async () => {
     setIsCleaningCache(true);
     try {
@@ -354,39 +353,13 @@ export default function App() {
       } catch {
         /* 忽略 */
       }
-
-      let cacheMB = 0;
-      if (navigator.storage?.estimate) {
-        const est = await navigator.storage.estimate();
-        cacheMB = Math.round((est.usage || 0) / 1048576);
-      }
-      setStorage((prev) => ({ ...prev, cacheMB }));
+      // 清理后重新读取设备真实存储（缓存目录可能仍被系统占用，以实际统计为准）
+      await installed.refresh({ silent: true });
     } catch {
       /* 权限受限时静默 */
     } finally {
       setIsCleaningCache(false);
     }
-  };
-
-  // Handle App Install & Uninstall
-  const handleInstallApp = (newApp: TVApp) => {
-    setApps((prev) => [newApp, ...prev]);
-    setStorage((prev) => ({
-      ...prev,
-      appsMB: prev.appsMB + newApp.sizeMB,
-      freeMB: Math.max(0, prev.freeMB - newApp.sizeMB),
-    }));
-  };
-
-  const handleUninstallApp = (appId: string) => {
-    const app = apps.find((a) => a.id === appId);
-    if (!app) return;
-    setApps((prev) => prev.filter((a) => a.id !== appId));
-    setStorage((prev) => ({
-      ...prev,
-      appsMB: Math.max(0, prev.appsMB - app.sizeMB),
-      freeMB: prev.freeMB + app.sizeMB,
-    }));
   };
 
   // Handle Custom Sources
@@ -436,7 +409,8 @@ export default function App() {
       } else if (currentTab === 4) {
         setFocusedId('btn-add-source');
       } else if (currentTab === 5) {
-        setFocusedId(`app-card-${apps[0]?.id}`);
+        // 应用列表由原生异步读取，为空时先停在顶部导航，避免聚焦到不存在的卡片
+        setFocusedId(apps.length > 0 ? `app-card-${apps[0].id}` : 'nav-tab-5');
       } else if (currentTab === 6) {
         const first = mediaList.find((m) => favoritesSet.has(m.id));
         if (first) setFocusedId(`card-${first.id}`);
@@ -782,9 +756,14 @@ export default function App() {
           {currentTab === 5 && (
             <AppsLauncher
               apps={apps}
+              icons={installed.icons}
+              loading={installed.loading}
+              error={installed.error}
+              lastUpdated={installed.lastUpdated}
+              supported={installed.supported}
+              onRefresh={() => installed.refresh()}
+              onRequestIcon={installed.requestIcon}
               storage={storage}
-              onInstallApp={handleInstallApp}
-              onUninstallApp={handleUninstallApp}
               onCleanCache={handleCleanCache}
               isCleaningCache={isCleaningCache}
               focusedId={focusedId}
