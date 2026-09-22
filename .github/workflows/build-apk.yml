@@ -54,7 +54,21 @@ jobs:
       - name: 安装 Android 构建依赖
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          # runner 已设置 ANDROID_HOME，但其 cmdline-tools 不在 PATH（sdkmanager: command not found）
+          # 这里显式定位 sdkmanager 并把它与 platform-tools 加进 PATH
+          SDKM_PATH=$(find "$ANDROID_HOME" -maxdepth 4 -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -z "$SDKM_PATH" ]; then
+            echo "::error::未在 $ANDROID_HOME 下找到 sdkmanager"
+            exit 1
+          fi
+          SDKM_BIN=$(dirname "$SDKM_PATH")
+          echo "SDKM_BIN=$SDKM_BIN"
+          export PATH="$SDKM_BIN:$ANDROID_HOME/platform-tools:$PATH"
+          # 持久化给后续步骤（gradle 构建）
+          echo "$SDKM_BIN" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "platforms;android-36" "build-tools;36.0.0"
 
