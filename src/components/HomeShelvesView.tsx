@@ -15,6 +15,12 @@ interface HomeShelvesViewProps {
   onSelectMedia: (media: MediaItem) => void;
   language: SupportedLanguage;
   onNavigateTab?: (tabIndex: number) => void;
+  /** 豆瓣榜单数据：榜单 key -> 内容，首页每个 shelf 优先取这里 */
+  doubanShelves?: Record<string, MediaItem[]>;
+  /** 豆瓣数据加载中 */
+  doubanLoading?: boolean;
+  /** 下拉刷新豆瓣数据 */
+  onRefresh?: () => void;
 }
 
 export const HomeShelvesView: React.FC<HomeShelvesViewProps> = ({
@@ -27,6 +33,9 @@ export const HomeShelvesView: React.FC<HomeShelvesViewProps> = ({
   onSelectMedia,
   language,
   onNavigateTab,
+  doubanShelves,
+  doubanLoading,
+  onRefresh,
 }) => {
   const t = translations[language];
 
@@ -35,11 +44,19 @@ export const HomeShelvesView: React.FC<HomeShelvesViewProps> = ({
     (m) => progressMap[m.id] && progressMap[m.id].currentTime > 5
   );
 
-  // Spotlight Top Featured item (first high rating movie or focused item)
-  const spotlightMedia = mediaList.find((m) => m.type === 'movie' || m.category === 'movie') || mediaList[0];
+  // 精选推荐优先用豆瓣「实时热门」第一条，取不到时退回本地数据
+  const spotlightMedia =
+    doubanShelves?.movie_real_time_hotest?.[0] ||
+    doubanShelves?.movie_showing?.[0] ||
+    mediaList.find((m) => m.type === 'movie' || m.category === 'movie') ||
+    mediaList[0];
 
   // Group media by shelves strictly using real type and category identifiers
   const getShelfMedia = (key: string): MediaItem[] => {
+    // 豆瓣榜单优先：shelf.key 直接对应豆瓣榜单 key
+    const fromDouban = doubanShelves?.[key];
+    if (fromDouban && fromDouban.length > 0) return fromDouban;
+
     switch (key) {
       case 'continueWatching':
         return continueWatchingMedia;

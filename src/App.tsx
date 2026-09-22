@@ -17,6 +17,11 @@ import { ambientColor } from './utils/theme';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { fetchM3U, ONLINE_SOURCE, toSource } from './services/iptv';
+import { useDouban } from './hooks/useDouban';
+import { doubanListToMedia } from './utils/mediaMapper';
+import { MOVIE_LISTS, SERIES_LISTS } from './services/douban';
+import { useDeviceMode } from './hooks/useDeviceMode';
+import { MobileTabBar } from './components/MobileTabBar';
 
 // Components
 import { NavigationHeader } from './components/NavigationHeader';
@@ -78,16 +83,20 @@ export default function App() {
     return saved ? JSON.parse(saved) : ['m-oppenheimer', 's-three-body', 'live-cctv1-4k'];
   });
 
-  // Home Shelves Ordering
+  // Home Shelves Ordering —— 除「继续观看 / 直播」外，其余均为豆瓣实时榜单
   const [shelves, setShelves] = useState<ChannelShelfConfig[]>([
     { id: 'sh-resume', key: 'continueWatching', titleKey: 'shelf.continueWatching', order: 0, isVisible: true },
     { id: 'sh-live-tv', key: 'liveTv', titleKey: 'shelf.liveTv', order: 1, isVisible: true },
-    { id: 'sh-spotlight', key: 'spotlight', titleKey: 'shelf.spotlight', order: 2, isVisible: true },
-    { id: 'sh-trending', key: 'trendingMovies', titleKey: 'shelf.trendingMovies', order: 3, isVisible: true },
-    { id: 'sh-series', key: 'hotSeries', titleKey: 'shelf.hotSeries', order: 4, isVisible: true },
-    { id: 'sh-4k', key: '4kHdr', titleKey: 'shelf.4kHdr', order: 5, isVisible: true },
-    { id: 'sh-cinema', key: 'latestCinema', titleKey: 'shelf.latestCinema', order: 6, isVisible: true },
-    { id: 'sh-custom', key: 'customChannels', titleKey: 'shelf.customChannels', order: 7, isVisible: true },
+    { id: 'sh-db-showing', key: 'movie_showing', titleKey: '正在热映', order: 2, isVisible: true },
+    { id: 'sh-db-hotest', key: 'movie_real_time_hotest', titleKey: '实时热门', order: 3, isVisible: true },
+    { id: 'sh-db-top250', key: 'movie_top250', titleKey: '豆瓣 Top 250', order: 4, isVisible: true },
+    { id: 'sh-db-high', key: 'movie_high_score', titleKey: '高分电影', order: 5, isVisible: true },
+    { id: 'sh-db-tvhot', key: 'tv_hot', titleKey: '热门剧集', order: 6, isVisible: true },
+    { id: 'sh-db-tvcn', key: 'tv_domestic', titleKey: '国产剧', order: 7, isVisible: true },
+    { id: 'sh-db-tvus', key: 'tv_american', titleKey: '美剧', order: 8, isVisible: true },
+    { id: 'sh-db-anime', key: 'tv_animation', titleKey: '动漫', order: 9, isVisible: true },
+    { id: 'sh-db-variety', key: 'tv_variety_show', titleKey: '综艺', order: 10, isVisible: true },
+    { id: 'sh-db-custom', key: 'customChannels', titleKey: 'shelf.customChannels', order: 11, isVisible: true },
   ]);
 
   // System & Preferences
@@ -197,6 +206,89 @@ export default function App() {
     ]);
   }, [liveChannels]);
 
+  // 豆瓣实时数据（首页推荐 + 分类 chips + 列表分页）
+  const {
+    lists: doubanLists,
+    loading: doubanLoading,
+    error: doubanError,
+    refresh: refreshDouban,
+    loadMore: loadMoreDouban,
+    loadingMore: doubanLoadingMore,
+  } = useDouban();
+
+  // 豆瓣榜单 → MediaItem（首页 shelf 与电影/剧集分类页共用同一份数据）
+  const doubanShelves = useMemo<Record<string, MediaItem[]>>(() => {
+    const out: Record<string, MediaItem[]> = {};
+    for (const def of [...MOVIE_LISTS, ...SERIES_LISTS]) {
+      const page = doubanLists[def.key];
+      if (page && page.items.length > 0) {
+        out[def.key] = doubanListToMedia(page.items, def.name);
+      }
+    }
+    return out;
+  }, [doubanLists]);
+
+  /** 合并多个榜单并按 id 去重（电影/剧集页用） */
+  const mergeLists = useCallback(
+    (defs: { key: string }[]): MediaItem[] => {
+      const seen = new Set<string>();
+      const out: MediaItem[] = [];
+      for (const d of defs) {
+        for (const m of doubanShelves[d.key] || []) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id);
+            out.push(m);
+          }
+        }
+      }
+      return out;
+    },
+    [doubanShelves]
+  );
+
+  const movieMedia = useMemo(() => mergeLists(MOVIE_LISTS), [mergeLists]);
+  const seriesMedia = useMemo(() => mergeLists(SERIES_LISTS), [mergeLists]);
+
+  // 设备形态：手机走触摸布局 + 手势，盒子保持遥控器布局
+  const { isMobile } = useDeviceMode();
+
+  // 手机端：左右滑切换底部 Tab（横向滚动区域不参与，避免和海报墙打架）
+  useEffect(() => {
+    if (!isMobile) return;
+    const TABS = [0, 1, 2, 3, 4];
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+
+    const onStart = (e: TouchEvent) => {
+      if (playingMedia || activeMedia) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('.overflow-x-auto')) return;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      tracking = true;
+    };
+
+    const onEnd = (e: TouchEvent) => {
+      if (!tracking) return;
+      tracking = false;
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      const idx = TABS.indexOf(currentTab);
+      if (idx < 0) return;
+      if (dx < 0 && idx < TABS.length - 1) setCurrentTab(TABS[idx + 1]);
+      else if (dx > 0 && idx > 0) setCurrentTab(TABS[idx - 1]);
+    };
+
+    window.addEventListener('touchstart', onStart, { passive: true });
+    window.addEventListener('touchend', onEnd, { passive: true });
+    return () => {
+      window.removeEventListener('touchstart', onStart);
+      window.removeEventListener('touchend', onEnd);
+    };
+  }, [isMobile, currentTab, playingMedia, activeMedia]);
+
   // Handle Focus Change
   const handleFocusItem = useCallback((id: string) => {
     setFocusedId(id);
@@ -209,8 +301,21 @@ export default function App() {
     }
   }, [mediaList]);
 
+  // 轻提示（豆瓣条目没有播放源时给出引导，避免点了没反应）
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3200);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
   // Handle Play Media
   const handlePlayMedia = (media: MediaItem, resumeTime = 0, episodeId?: string) => {
+    // 豆瓣只提供元数据（海报/评分/简介），没有播放地址
+    if (!media.streamUrl) {
+      setToast(`「${media.title}」暂无播放源 · 请到「自定义源」配置后在详情页播放`);
+      return;
+    }
     setPlayingMedia({
       media,
       initialTime: resumeTime,
@@ -545,19 +650,21 @@ export default function App() {
       </div>
 
       {/* Main App Content Layout */}
-      <div className="relative z-10 flex flex-col min-h-screen">
-        {/* Navigation Header */}
-        <NavigationHeader
-          currentTab={currentTab}
-          onSelectTab={(tabIdx) => {
-            setCurrentTab(tabIdx);
-            setFocusedId(`nav-tab-${tabIdx}`);
-          }}
-          focusedId={focusedId}
-          language={language}
-          hasUpdateNotification={hasUpdateNotification}
-          onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
-        />
+      <div className={`relative z-10 flex flex-col min-h-screen ${isMobile ? 'pb-safe pb-16' : ''}`}>
+        {/* Navigation Header（手机端收起横向 Dock，改用底部 Tab 栏） */}
+        {!isMobile && (
+          <NavigationHeader
+            currentTab={currentTab}
+            onSelectTab={(tabIdx) => {
+              setCurrentTab(tabIdx);
+              setFocusedId(`nav-tab-${tabIdx}`);
+            }}
+            focusedId={focusedId}
+            language={language}
+            hasUpdateNotification={hasUpdateNotification}
+            onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
+          />
+        )}
 
         {/* Tab Views */}
         <main className="flex-1 overflow-y-auto no-scrollbar">
@@ -583,6 +690,9 @@ export default function App() {
                 setCurrentTab(idx);
                 setFocusedId(`nav-tab-${idx}`);
               }}
+              doubanShelves={doubanShelves}
+              doubanLoading={doubanLoading}
+              onRefresh={refreshDouban}
             />
           )}
 
@@ -613,10 +723,14 @@ export default function App() {
           {/* Tab 2: Movies Grid */}
           {currentTab === 2 && (
             <MediaGridView
-              title="全部电影"
+              title="电影"
               categoryFilter="movie"
-              subtitle="演示内容（示例片源）· 接入真实点播源请前往「自定义源」"
-              mediaList={mediaList.filter((m) => m.type === 'movie' || m.category === 'movie')}
+              subtitle={
+                doubanLoading
+                  ? '正在拉取豆瓣实时数据…'
+                  : doubanError || `豆瓣实时数据 · 共 ${movieMedia.length} 部`
+              }
+              mediaList={movieMedia}
               progressMap={progressMap}
               favoritesSet={favoritesSet}
               focusedId={focusedId}
@@ -632,10 +746,14 @@ export default function App() {
           {/* Tab 3: Series Grid */}
           {currentTab === 3 && (
             <MediaGridView
-              title="精品剧集"
+              title="剧集"
               categoryFilter="series"
-              subtitle="演示内容（示例片源）· 接入真实点播源请前往「自定义源」"
-              mediaList={mediaList.filter((m) => m.type === 'series' || m.category === 'series')}
+              subtitle={
+                doubanLoading
+                  ? '正在拉取豆瓣实时数据…'
+                  : doubanError || `豆瓣实时数据 · 共 ${seriesMedia.length} 部`
+              }
+              mediaList={seriesMedia}
               progressMap={progressMap}
               favoritesSet={favoritesSet}
               focusedId={focusedId}
@@ -742,6 +860,17 @@ export default function App() {
             />
           )}
         </main>
+
+        {/* 手机端底部 Tab 栏 */}
+        {isMobile && (
+          <MobileTabBar
+            currentTab={currentTab}
+            onSelectTab={(idx) => {
+              setCurrentTab(idx);
+              setFocusedId(`nav-tab-${idx}`);
+            }}
+          />
+        )}
       </div>
 
       {/* Media Detail Modal */}
@@ -781,6 +910,13 @@ export default function App() {
           onClose={() => setIsReorderModalOpen(false)}
           language={language}
         />
+      )}
+
+      {/* 轻提示（无播放源引导等） */}
+      {toast && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[60] bg-neutral-900 border border-sky-500/40 text-sky-200 px-5 py-3 rounded-2xl text-xs font-medium shadow-2xl max-w-md text-center">
+          {toast}
+        </div>
       )}
 
       {/* Update Prompt Modal */}

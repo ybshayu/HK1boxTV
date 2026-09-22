@@ -90,6 +90,9 @@ jobs:
           fi
           grep -o 'usesCleartextTraffic="[^"]*"' "$MANIFEST" || echo "警告：未找到 usesCleartextTraffic"
 
+      - name: 注入豆瓣海报 Referer 处理（原生 WebViewClient）
+        run: python3 scripts/patch-android-webview.py
+
       - name: 注入 release 签名配置 (build.gradle)
         run: python3 scripts/patch-android-signing.py
 

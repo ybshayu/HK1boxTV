@@ -47,6 +47,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [focusedControl, setFocusedControl] = useState<number>(0); // 0: Play/Pause, 1: Rewind, 2: Forward, 3: Speed, 4: Aspect, 5: NextEp
   const [loading, setLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 触屏手势相关
+  const [brightness, setBrightness] = useState<number>(1);
+  const [gestureHint, setGestureHint] = useState<string | null>(null);
+  const speedRef = useRef<number>(1);
 
   const controlsTimeoutRef = useRef<number | null>(null);
   const t = translations[language];
@@ -241,6 +245,138 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showControls, focusedControl, isPlaying]);
 
+  // 触屏手势：单击显隐控件 / 双击左右快退快进 / 左右滑拖进度 /
+  //           左半屏上下滑调亮度 / 右半屏上下滑调音量 / 长按 2 倍速
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startMs = 0;
+    let mode: 'none' | 'seek' | 'volume' | 'brightness' = 'none';
+    let lastTap = 0;
+    let longPress: number | null = null;
+    let startVolume = 1;
+    let startBrightness = 1;
+    let startTime = 0;
+    let longPressing = false;
+
+    const clearLongPress = () => {
+      if (longPress !== null) {
+        clearTimeout(longPress);
+        longPress = null;
+      }
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      startMs = Date.now();
+      mode = 'none';
+      longPressing = false;
+      startVolume = videoRef.current?.volume ?? 1;
+      startBrightness = brightness;
+      startTime = videoRef.current?.currentTime ?? 0;
+
+      clearLongPress();
+      longPress = window.setTimeout(() => {
+        longPressing = true;
+        if (videoRef.current) {
+          speedRef.current = speed;
+          videoRef.current.playbackRate = 2;
+          setSpeed(2);
+        }
+        setGestureHint('2× 倍速播放中');
+      }, 500);
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+
+      if (mode === 'none') {
+        if (longPressing) return;
+        if (Math.abs(dx) > 24 && Math.abs(dx) > Math.abs(dy)) {
+          mode = 'seek';
+        } else if (Math.abs(dy) > 24) {
+          mode = startX < window.innerWidth / 2 ? 'brightness' : 'volume';
+        } else {
+          return;
+        }
+        clearLongPress();
+      }
+
+      if (mode === 'seek') {
+        const video = videoRef.current;
+        if (!video || !duration) return;
+        const delta = (dx / window.innerWidth) * duration * 0.6;
+        video.currentTime = Math.max(0, Math.min(duration, startTime + delta));
+        setGestureHint(`${formatSeconds(video.currentTime)} / ${formatSeconds(duration)}`);
+      } else if (mode === 'volume') {
+        const v = Math.max(0, Math.min(1, startVolume - dy / 300));
+        if (videoRef.current) videoRef.current.volume = v;
+        setIsMuted(v === 0);
+        setGestureHint(`音量 ${Math.round(v * 100)}%`);
+      } else if (mode === 'brightness') {
+        const b = Math.max(0.25, Math.min(1.6, startBrightness - dy / 300));
+        setBrightness(b);
+        setGestureHint(`亮度 ${Math.round((b / 1.6) * 100)}%`);
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      const wasLong = longPressing;
+      clearLongPress();
+
+      if (wasLong) {
+        // 松手恢复原速
+        if (videoRef.current) videoRef.current.playbackRate = speedRef.current;
+        setSpeed(speedRef.current);
+        longPressing = false;
+        setGestureHint(null);
+        mode = 'none';
+        return;
+      }
+
+      const dt = Date.now() - startMs;
+      if (mode === 'none' && dt < 240) {
+        const now = Date.now();
+        const t = e.changedTouches[0];
+        if (now - lastTap < 300) {
+          // 双击：左半屏后退 10 秒 / 右半屏前进 10 秒
+          if (t.clientX < window.innerWidth / 2) handleSeek(-10);
+          else handleSeek(10);
+          lastTap = 0;
+        } else {
+          lastTap = now;
+          const myTap = now;
+          window.setTimeout(() => {
+            // 300ms 内没有第二击才当作单击
+            if (lastTap === myTap) {
+              setShowControls((s) => !s);
+              triggerControls();
+            }
+          }, 300);
+        }
+      }
+      mode = 'none';
+      window.setTimeout(() => setGestureHint(null), 500);
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      clearLongPress();
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, [duration, brightness, speed]);
+
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
@@ -257,6 +393,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onTimeUpdate={onTimeUpdate}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
+        style={brightness !== 1 ? { filter: `brightness(${brightness})` } : undefined}
         className={`w-full h-full ${
           aspectRatio === '16-9' 
             ? 'object-contain aspect-video' 
@@ -266,6 +403,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }`}
         playsInline
       />
+
+      {/* 手势操作反馈（拖动进度 / 音量 / 亮度 / 倍速） */}
+      {gestureHint && (
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 z-40 bg-black/75 text-white px-5 py-2.5 rounded-2xl text-sm font-semibold border border-white/15 pointer-events-none">
+          {gestureHint}
+        </div>
+      )}
 
       {/* Breakpoint Resume Toast Prompt */}
       {resumePrompt && (
