@@ -27,6 +27,22 @@ MANIFEST = "android/app/src/main/AndroidManifest.xml"
 PLUGIN_SRC = "native/android/AppManagerPlugin.java"
 
 PERMISSION_LINE = '<uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />'
+
+# 包可见性声明：Android 11+ 里声明某个 <intent> 之后，
+# 匹配它的应用即对本应用可见（不依赖 QUERY_ALL_PACKAGES）。
+# action 与 category 必须成对出现才生效。
+QUERIES_BLOCK = """    <!-- 包可见性：声明后，所有带桌面/电视启动入口的应用对本应用可见 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+    </queries>
+"""
 REGISTER_CALL = "registerPlugin(AppManagerPlugin.class);"
 
 # MainActivity 完全没有 onCreate 时（正常 Capacitor 模板不会有这种情况）的兜底注入。
@@ -111,7 +127,17 @@ def patch_main_activity():
 
 
 def patch_manifest():
-    """3) AndroidManifest.xml 加 QUERY_ALL_PACKAGES 权限"""
+    """3) AndroidManifest.xml 加包可见性声明
+
+    两件事：
+      a) QUERY_ALL_PACKAGES 权限（最全，但受商店政策与系统实现影响）
+      b) <queries> 里声明 MAIN/LAUNCHER 与 MAIN/LEANBACK_LAUNCHER intent
+         —— 这是 Android 11+ 包可见性机制的标准做法：声明某个 intent 后，
+         匹配它的应用即对本应用可见，不依赖 QUERY_ALL_PACKAGES。
+         对「应用库」这个场景，有启动入口的应用正是用户要管理的那批，
+         因此这条是最稳的保障（实测 HyperOS 3 上仅靠 QUERY_ALL_PACKAGES
+         授权成功却仍读不到其他应用）。
+    """
     if not os.path.exists(MANIFEST):
         log(f"未找到 {MANIFEST}，跳过权限注入")
         return False
@@ -119,23 +145,39 @@ def patch_manifest():
     with open(MANIFEST, "r", encoding="utf-8") as f:
         content = f.read()
 
-    if "QUERY_ALL_PACKAGES" in content:
-        log("AndroidManifest 已有 QUERY_ALL_PACKAGES，跳过")
-        return True
+    changed = False
 
     if "<application" not in content:
         log("AndroidManifest 里找不到 <application>，跳过")
         return False
 
-    content = re.sub(
-        r"(\n[ \t]*)(<application)",
-        lambda mo: "\n    " + PERMISSION_LINE + mo.group(1) + mo.group(2),
-        content,
-        count=1,
-    )
-    with open(MANIFEST, "w", encoding="utf-8") as f:
-        f.write(content)
-    log("已注入 android.permission.QUERY_ALL_PACKAGES（否则读不到完整应用列表）")
+    if "QUERY_ALL_PACKAGES" in content:
+        log("AndroidManifest 已有 QUERY_ALL_PACKAGES，跳过")
+    else:
+        content = re.sub(
+            r"(\n[ \t]*)(<application)",
+            lambda mo: "\n    " + PERMISSION_LINE + mo.group(1) + mo.group(2),
+            content,
+            count=1,
+        )
+        log("已注入 android.permission.QUERY_ALL_PACKAGES")
+        changed = True
+
+    if "<queries>" in content:
+        log("AndroidManifest 已有 <queries>，跳过")
+    else:
+        content = re.sub(
+            r"(\n[ \t]*)(<application)",
+            lambda mo: "\n" + QUERIES_BLOCK + mo.group(1) + mo.group(2),
+            content,
+            count=1,
+        )
+        log("已注入 <queries>（让 MAIN/LAUNCHER 与 LEANBACK_LAUNCHER 应用可见）")
+        changed = True
+
+    if changed:
+        with open(MANIFEST, "w", encoding="utf-8") as f:
+            f.write(content)
     return True
 
 

@@ -623,8 +623,11 @@ export default function App() {
         <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/75 to-black" />
       </div>
 
-      {/* Main App Content Layout */}
-      <div className={`relative z-10 flex flex-col min-h-screen ${isMobile ? 'pb-safe pb-16' : ''}`}>
+      {/* Main App Content Layout
+          注意：必须是 h-screen（固定视口高度）而不是 min-h-screen。
+          index.css 里 body 是 overflow-y: hidden，若外层高度不固定，
+          main 就会被内容撑开而不是产生自己的滚动条 → 整页滚不动（手机端尤其明显）。 */}
+      <div className={`relative z-10 flex flex-col h-screen ${isMobile ? 'pb-safe pb-16' : ''}`}>
         {/* Navigation Header（手机端收起横向 Dock，改用底部 Tab 栏） */}
         {!isMobile && (
           <NavigationHeader
@@ -640,8 +643,9 @@ export default function App() {
           />
         )}
 
-        {/* Tab Views */}
-        <main className="flex-1 overflow-y-auto no-scrollbar">
+        {/* Tab Views
+            min-h-0 是必需的：flex 子项默认 min-height:auto，会被内容撑开而不滚动 */}
+        <main className="flex-1 min-h-0 overflow-y-auto no-scrollbar">
           {/* Tab 0: Home Shelves */}
           {currentTab === 0 && (
             <HomeShelvesView
