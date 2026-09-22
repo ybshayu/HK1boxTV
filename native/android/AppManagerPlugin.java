@@ -16,11 +16,7 @@ import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
-import android.os.Process;
 import android.os.StatFs;
-import android.os.storage.StorageManager;
-import android.os.storage.StorageStats;
-import android.os.storage.StorageStatsManager;
 import android.util.Base64;
 
 import com.getcapacitor.JSArray;
@@ -156,7 +152,7 @@ public class AppManagerPlugin extends Plugin {
 
                         o.put("isTv", isTvApp(pm, ai.packageName));
                         o.put("category", guessCategory(ai, isSystem));
-                        o.put("sizeBytes", querySize(ctx, ai));
+                        o.put("sizeBytes", querySize(ai));
 
                         arr.put(o);
                     }
@@ -203,30 +199,34 @@ public class AppManagerPlugin extends Plugin {
     }
 
     /**
-     * 应用占用空间。
-     * API 26+ 用 StorageStatsManager 拿「安装 + 数据」真实占用；
-     * 拿不到时退回 APK 文件大小（此时仅为安装包体积，会偏小）。
+     * 应用体积 = APK 本体 + 各 Split APK 的大小。
+     *
+     * 这里刻意不去查「安装 + 数据」总占用：
+     * android.app.usage.StorageStatsManager.queryStatsForPackage() 查询**其他**应用
+     * 需要 PACKAGE_USAGE_STATS（系统级签名权限），普通应用调用必然抛 SecurityException，
+     * 与其写一段永远走不到的分支，不如用确定可得的安装包体积，
+     * 界面上也如实标注为「安装包大小」。
      */
-    private long querySize(Context ctx, ApplicationInfo ai) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                StorageStatsManager ssm =
-                        (StorageStatsManager) ctx.getSystemService(Context.STORAGE_STATS_SERVICE);
-                if (ssm != null) {
-                    StorageStats stats = ssm.queryStatsForPackage(
-                            StorageManager.UUID_DEFAULT, ai.packageName, Process.myUserHandle());
-                    long total = stats.getAppBytes() + stats.getDataBytes();
-                    if (total > 0) return total;
-                }
-            } catch (Exception ignored) {
-                // 无权限或包刚被卸载 → 走兜底
-            }
+    private long querySize(ApplicationInfo ai) {
+        long size = 0;
+        try {
+            File base = new File(ai.sourceDir);
+            if (base.exists()) size += base.length();
+        } catch (Exception ignored) {
         }
         try {
-            return new File(ai.sourceDir).length();
-        } catch (Exception e) {
-            return 0;
+            // App Bundle 方式安装的应用会拆成多个 apk
+            String[] splits = ai.splitSourceDirs;
+            if (splits != null) {
+                for (String s : splits) {
+                    if (s == null) continue;
+                    File f = new File(s);
+                    if (f.exists()) size += f.length();
+                }
+            }
+        } catch (Exception ignored) {
         }
+        return size;
     }
 
     // ------------------------------------------------------------------

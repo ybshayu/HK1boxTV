@@ -85,12 +85,31 @@ const AppCard: React.FC<{
   onAskUninstall: (app: TVApp) => void;
 }> = ({ app, iconUrl, isFocused, onRequestIcon, onLaunch, onAskUninstall }) => {
   const ref = useRef<HTMLDivElement | null>(null);
-  const requested = useRef(false);
 
+  // 图标懒加载：只有接近视口的卡片才去原生取图标。
+  // 设备上动辄几百个应用，全量取图标（每个都是一次跨桥的 base64 传输）
+  // 在盒子上会明显拖慢首次进入。
   useEffect(() => {
-    if (iconUrl || requested.current) return;
-    requested.current = true;
-    onRequestIcon(app.packageName);
+    if (iconUrl) return;
+    const el = ref.current;
+    if (!el) return;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      onRequestIcon(app.packageName);
+      return;
+    }
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          onRequestIcon(app.packageName);
+          io.disconnect();
+        }
+      },
+      { rootMargin: '300px' }
+    );
+    io.observe(el);
+    return () => io.disconnect();
   }, [app.packageName, iconUrl, onRequestIcon]);
 
   const FallbackIcon = () => {
@@ -527,7 +546,7 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
                 <span className="text-white/80">{appToUninstall.version || '未知'}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-white/45">占用空间</span>
+                <span className="text-white/45">安装包大小</span>
                 <span className="text-white/80">{formatSize(appToUninstall.sizeMB)}</span>
               </div>
             </div>
