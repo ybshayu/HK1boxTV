@@ -103,10 +103,14 @@ async function getJson(url: string): Promise<any> {
   return r.json();
 }
 
-/** 把 m_ratio_poster 换成更省流量的 w300 尺寸（豆瓣图各尺寸同源，换路径即可） */
+/**
+ * 海报尺寸处理。
+ * 实测（2026-09-22）：豆瓣直接返回的 m_ratio_poster 就是 540×759 / 约 73KB，
+ * 卡片用完全够、也不费流量，所以**原样使用**即可。
+ * 坑：不要想当然地把路径改成 w300 —— 该路径在豆瓣不存在，会返回 404 导致整片海报裂图。
+ */
 function toThumb(url: string): string {
-  if (!url) return '';
-  return url.replace('/view/photo/m_ratio_poster/', '/view/photo/w300/');
+  return url || '';
 }
 
 /**

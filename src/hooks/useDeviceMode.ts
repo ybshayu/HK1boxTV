@@ -24,16 +24,10 @@ function detect(): DeviceMode {
   const hasTouch =
     'ontouchstart' in window || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
 
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  const minSide = Math.min(w, h);
-
-  // 竖屏 + 触摸 = 手机（盒子/电视都是横屏）
-  if (hasTouch && h > w) return 'mobile';
-
-  // 触摸屏但尺寸很小（手机横屏）= 手机
-  if (hasTouch && minSide < 600) return 'mobile';
-
+  // 判定依据就是「有没有触摸屏」：
+  // 手机/平板横竖屏都有触摸 → 触摸布局；HK1 Box 这类盒子靠遥控器，没有触摸屏 → TV 布局。
+  // （早期用屏幕尺寸判断会把横屏手机误判成 TV：手机横屏后 minSide 也有 1080）
+  if (hasTouch) return 'mobile';
   return 'tv';
 }
 
