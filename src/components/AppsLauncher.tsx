@@ -72,6 +72,8 @@ interface AppsLauncherProps {
   onFocusItem: (id: string) => void;
   /** 原生 D-pad 方向键导航句柄：父组件把方向交给本组件计算下一焦点 */
   navRef?: React.MutableRefObject<((dir: 'up' | 'down' | 'left' | 'right') => void) | null>;
+  /** v1.6.0：BACK 键先关本组件浮层（应用信息/卸载弹窗），返回 true 表示已消费 */
+  backRef?: React.MutableRefObject<(() => boolean) | null>;
 }
 
 type CategoryKey = 'all' | 'fav' | 'user' | 'media' | 'games' | 'tools' | 'system';
@@ -307,10 +309,33 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
   onCloseMenu,
   onFocusItem,
   navRef,
+  /** v1.6.0：父组件返回键用 —— 关闭本组件的应用信息/卸载弹窗，返回 true 表示已消费 */
+  backRef,
 }) => {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const [appToUninstall, setAppToUninstall] = useState<TVApp | null>(null);
   const [appInfo, setAppInfo] = useState<{ app: TVApp; info: AppInfo | null; loading: boolean } | null>(null);
+
+  // v1.6.0：BACK 键先关浮层。应用信息 / 卸载确认弹窗是本组件的局部状态，
+  // 父组件看不到 → 通过 backRef 注册「关闭浮层」回调，返回是否消费了这次返回键。
+  useEffect(() => {
+    if (!backRef) return;
+    backRef.current = () => {
+      if (appInfo) {
+        setAppInfo(null);
+        return true;
+      }
+      if (appToUninstall) {
+        setAppToUninstall(null);
+        return true;
+      }
+      return false;
+    };
+    return () => {
+      backRef.current = null;
+    };
+  }, [appInfo, appToUninstall, backRef]);
+
   // 操作菜单由父组件统一管理（menuPackage），便于遥控器 MENU 键与卡片长按/「⋯」按钮共用
   const appToMenu = useMemo(
     () => (menuPackage ? apps.find((a) => a.packageName === menuPackage) ?? null : null),

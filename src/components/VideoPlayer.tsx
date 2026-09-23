@@ -2,19 +2,27 @@ import React, { useState, useRef, useEffect } from 'react';
 import { MediaItem, PlaybackProgress, SupportedLanguage } from '../types';
 import { translations } from '../i18n/translations';
 import Hls from 'hls.js';
-import { 
-  Play, 
-  Pause, 
-  RotateCcw, 
-  FastForward, 
-  Rewind, 
-  Maximize, 
-  Volume2, 
-  VolumeX, 
+import {
+  fetchEpg,
+  resolveNowNext,
+  type EpgProgramme,
+  type EpgNow,
+} from '../services/epg';
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  FastForward,
+  Rewind,
+  Maximize,
+  Volume2,
+  VolumeX,
   ArrowLeft,
   Settings2,
   Tv,
-  Check
+  Check,
+  ListVideo,
+  X
 } from 'lucide-react';
 
 interface VideoPlayerProps {
@@ -24,6 +32,8 @@ interface VideoPlayerProps {
   onClose: () => void;
   onProgressUpdate: (progress: PlaybackProgress) => void;
   language: SupportedLanguage;
+  /** 直播自动换源：致命播放错误时请求父组件切换到下一条可用线路 */
+  onRequestSwitchSource?: (reason: string) => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -33,6 +43,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onClose,
   onProgressUpdate,
   language,
+  onRequestSwitchSource,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -54,6 +65,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const controlsTimeoutRef = useRef<number | null>(null);
   const t = translations[language];
+
+  // —— 直播 EPG 节目单（v1.6.0）：仅在直播模式按需拉取，60s 刷新进行中节目 ——
+  const isLive = media.type === 'live';
+  const [epgList, setEpgList] = useState<EpgProgramme[]>([]);
+  const [epgNow, setEpgNow] = useState<EpgNow | null>(null);
+  const [showEpg, setShowEpg] = useState<boolean>(false);
+  const epgListRef = useRef<EpgProgramme[]>([]);
+  epgListRef.current = epgList;
+
+  useEffect(() => {
+    if (!isLive) return;
+    let cancelled = false;
+    setEpgList([]);
+    setEpgNow(null);
+    setShowEpg(false);
+    fetchEpg(media.title)
+      .then((list) => {
+        if (cancelled) return;
+        setEpgList(list);
+        setEpgNow(resolveNowNext(list));
+      })
+      .catch(() => {
+        /* 节目单失败不影响播放 */
+      });
+    const timer = window.setInterval(() => {
+      setEpgNow(resolveNowNext(epgListRef.current));
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isLive, media.title]);
 
   // Resolve stream URL (if series episode selected, use episode stream)
   const currentEpisode = media.episodes?.find((ep) => ep.id === episodeId) || media.episodes?.[0];
@@ -92,6 +135,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setLoadError(null);
     setLoading(true);
 
+    // 直播自动换源：有备用线路时把失败交给父组件切换，而不是停在报错页
+    const handleFatal = (reason: string) => {
+      if (media.type === 'live' && media.altSources && media.altSources.length > 0 && onRequestSwitchSource) {
+        onRequestSwitchSource(reason);
+        return;
+      }
+      setLoadError(reason);
+    };
+
     const onReady = () => {
       setLoading(false);
       if (initialTime > 0) {
@@ -121,7 +173,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hls.on(Hls.Events.ERROR, (_evt, data) => {
         if (data.fatal) {
           setLoading(false);
-          setLoadError(
+          handleFatal(
             data.type === Hls.ErrorTypes.NETWORK_ERROR
               ? '网络无法连接该直播源（源可能已失效）'
               : '该直播源暂时无法播放'
@@ -133,7 +185,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       video.onloadedmetadata = onReady;
       video.onerror = () => {
         setLoading(false);
-        setLoadError('该直播源暂时无法播放（地址可能已失效）');
+        handleFatal('该直播源暂时无法播放（地址可能已失效）');
       };
     }
 
@@ -207,43 +259,92 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   // Remote key bindings inside player
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      triggerControls();
+  // v1.6.0：统一抽成 keyRef（键盘 key 名），供 keydown 与原生 DPAD 直通两个入口复用；
+  // 并对 keyCode 兜底（部分 WebView 不把 DPAD 转成 ArrowDown 等 key 名，只给原始 keyCode）
+  const ANDROID_KEY_BY_CODE: Record<number, string> = {
+    4: 'Escape', // KEYCODE_BACK（个别 WebView 会以 keydown 形式给出）
+    20: 'ArrowDown', // KEYCODE_DPAD_DOWN
+    21: 'ArrowUp', // KEYCODE_DPAD_UP
+    22: 'ArrowLeft', // KEYCODE_DPAD_LEFT
+    23: 'Enter', // KEYCODE_DPAD_CENTER
+    66: 'Enter', // KEYCODE_ENTER
+  };
+  const playerKeyRef = useRef<(key: string) => void>(() => {});
+  playerKeyRef.current = (key: string) => {
+    triggerControls();
 
-      if (e.key === ' ' || e.key === 'Enter') {
-        if (!showControls) {
-          togglePlay();
-        } else {
-          // Execute focused control
-          if (focusedControl === 0) togglePlay();
-          else if (focusedControl === 1) handleSeek(-10);
-          else if (focusedControl === 2) handleSeek(10);
-          else if (focusedControl === 3) cycleSpeed();
-          else if (focusedControl === 4) cycleAspect();
-        }
-      } else if (e.key === 'ArrowLeft') {
-        if (showControls) {
-          setFocusedControl((prev) => Math.max(0, prev - 1));
-        } else {
-          handleSeek(-10);
-        }
-      } else if (e.key === 'ArrowRight') {
-        if (showControls) {
-          setFocusedControl((prev) => Math.min(4, prev + 1));
-        } else {
-          handleSeek(10);
-        }
-      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        setShowControls(true);
-      } else if (e.key === 'Escape' || e.key === 'Backspace') {
+    if (key === ' ' || key === 'Enter') {
+      if (!showControls) {
+        togglePlay();
+      } else {
+        // Execute focused control
+        if (focusedControl === 0) togglePlay();
+        else if (focusedControl === 1) handleSeek(-10);
+        else if (focusedControl === 2) handleSeek(10);
+        else if (focusedControl === 3) cycleSpeed();
+        else if (focusedControl === 4) cycleAspect();
+        else if (focusedControl === 5) setShowEpg((v) => !v);
+      }
+    } else if (key === 'ArrowLeft') {
+      if (showControls) {
+        setFocusedControl((prev) => Math.max(0, prev - 1));
+      } else {
+        handleSeek(-10);
+      }
+    } else if (key === 'ArrowRight') {
+      if (showControls) {
+        setFocusedControl((prev) => Math.min(isLive ? 5 : 4, prev + 1));
+      } else {
+        handleSeek(10);
+      }
+    } else if (key === 'ArrowUp' || key === 'ArrowDown') {
+      setShowControls(true);
+    } else if (key === 'Escape' || key === 'Backspace') {
+      if (showEpg) {
+        setShowEpg(false);
+      } else {
         onClose();
       }
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const mapped = ANDROID_KEY_BY_CODE[e.keyCode];
+      const key = mapped || e.key;
+      const interesting =
+        [' ', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape', 'Backspace'].includes(key);
+      if (!interesting) {
+        // 便于 logcat 诊断：打出没被识别的按键（排查不同盒子遥控器键码差异）
+        console.log('[PlayerKey] unhandled', e.key, e.keyCode);
+        return;
+      }
+      e.preventDefault();
+      playerKeyRef.current(key);
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showControls, focusedControl, isPlaying]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 原生 DPAD 直通入口（MainActivity.dispatchKeyEvent → evaluateJavascript）
+  useEffect(() => {
+    (window as any).__hk1PlayerKey = (dir: string) => {
+      const map: Record<string, string> = {
+        center: 'Enter',
+        left: 'ArrowLeft',
+        right: 'ArrowRight',
+        up: 'ArrowUp',
+        down: 'ArrowDown',
+        back: 'Escape',
+      };
+      playerKeyRef.current(map[dir] || dir);
+    };
+    return () => {
+      delete (window as any).__hk1PlayerKey;
+    };
+  }, []);
 
   // 触屏手势：单击显隐控件 / 双击左右快退快进 / 左右滑拖进度 /
   //           左半屏上下滑调亮度 / 右半屏上下滑调音量 / 长按 2 倍速
@@ -458,7 +559,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <span>{media.hdrType}</span>
                 <span>•</span>
                 <span>{media.audio}</span>
+                {media.altSources && media.altSources.length > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className="text-emerald-300/80">{media.altSources.length + 1} 条线路</span>
+                  </>
+                )}
               </div>
+              {/* 直播 EPG：正在播 / 接下来（51zmt DIYP 数据，60s 刷新） */}
+              {isLive && epgNow?.current && (
+                <div className="mt-2 max-w-xl">
+                  <div className="flex items-center gap-2 text-xs text-white/85">
+                    <span className="px-1.5 py-0.5 rounded bg-rose-500/25 text-rose-300 font-bold shrink-0">正在播</span>
+                    <span className="truncate">{epgNow.current.title}</span>
+                    <span className="text-white/40 shrink-0">{epgNow.current.start}-{epgNow.current.end}</span>
+                  </div>
+                  <div className="mt-1 h-1 bg-white/15 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-rose-400/80 rounded-full"
+                      style={{ width: `${Math.round(epgNow.progress * 100)}%` }}
+                    />
+                  </div>
+                  {epgNow.next && (
+                    <div className="flex items-center gap-2 text-[11px] text-white/50 mt-1">
+                      <span className="shrink-0">接下来</span>
+                      <span className="truncate">{epgNow.next.title}</span>
+                      <span className="shrink-0">{epgNow.next.start}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -572,9 +702,75 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             >
               {aspectRatio === '16-9' ? t['player.fit16_9'] : aspectRatio === 'fill' ? t['player.fitFill'] : t['player.fitOriginal']}
             </button>
+
+            {/* 节目单（仅直播）：遥控器焦点位 5，OK 键开关 */}
+            {isLive && (
+              <button
+                id="player-btn-epg"
+                onClick={() => setShowEpg((v) => !v)}
+                className={`px-4 py-2.5 rounded-2xl text-xs font-medium transition cursor-pointer border flex items-center gap-1.5 ${
+                  focusedControl === 5
+                    ? 'bg-white text-black ring-4 ring-white/50 scale-105'
+                    : 'bg-white/10 hover:bg-white/20 text-white border-white/10'
+                }`}
+              >
+                <ListVideo className="w-4 h-4" />
+                节目单
+              </button>
+            )}
           </div>
         </div>
       </div>
+
+      {/* EPG 节目单面板（右侧抽屉，盖在 OSD 之上） */}
+      {isLive && showEpg && (
+        <div className="absolute inset-y-0 right-0 z-40 w-full max-w-sm bg-neutral-950/95 border-l border-white/10 backdrop-blur-sm flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white truncate">今日节目单 · {media.title}</div>
+              <div className="text-[11px] text-white/40 mt-0.5">
+                {epgList.length > 0 ? `${epgList.length} 个节目 · 51zmt EPG` : '暂无节目单数据'}
+              </div>
+            </div>
+            <button
+              onClick={() => setShowEpg(false)}
+              className="p-2 rounded-xl bg-white/5 text-white/60 hover:text-white cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+            {epgList.length === 0 && (
+              <div className="text-xs text-white/40 text-center py-10">
+                该频道暂无节目单数据
+                <br />
+                <span className="text-white/25">播放不受影响</span>
+              </div>
+            )}
+            {epgList.map((p, i) => {
+              const isNow = epgNow?.current === p;
+              return (
+                <div
+                  key={`${p.start}-${i}`}
+                  className={`px-3 py-2 rounded-xl flex items-center gap-3 text-xs ${
+                    isNow
+                      ? 'bg-rose-500/15 border border-rose-400/40'
+                      : 'bg-white/5 border border-transparent'
+                  }`}
+                >
+                  <span className={`font-mono shrink-0 ${isNow ? 'text-rose-300' : 'text-white/45'}`}>{p.start}</span>
+                  <span className={`truncate ${isNow ? 'text-white font-semibold' : 'text-white/75'}`}>{p.title}</span>
+                  {isNow && (
+                    <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded bg-rose-500/25 text-rose-300 text-[10px] font-bold">
+                      正在播
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

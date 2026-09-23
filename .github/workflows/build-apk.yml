@@ -105,6 +105,12 @@ jobs:
       - name: 注入应用管理插件（读取/启动/卸载已装应用）
         run: python3 scripts/patch-android-apps.py
 
+      # 遥控器 DPAD 直通：WebView 会把方向键吃掉做原生焦点移动，JS 收不到 keydown。
+      # 在 MainActivity.dispatchKeyEvent 拦截并 evaluateJavascript 转发给前端焦点机。
+      # 依赖 MainActivity 已生成（cap add android 之后即可，与上面两个 patch 无顺序依赖）。
+      - name: 注入遥控器 DPAD 直通（原生按键转发）
+        run: python3 scripts/patch-android-keys.py
+
       - name: 注入 release 签名配置 (build.gradle)
         run: python3 scripts/patch-android-signing.py
 

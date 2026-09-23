@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Bookmark,
   Clapperboard,
@@ -15,6 +15,8 @@ import {
 interface MobileTabBarProps {
   currentTab: number;
   onSelectTab: (tabIndex: number) => void;
+  /** v1.6.0：BACK 键先关「更多」抽屉，返回 true 表示已消费 */
+  backRef?: React.MutableRefObject<(() => boolean) | null>;
 }
 
 /** 底部常驻的 4 个主入口 */
@@ -34,9 +36,24 @@ const MORE_ITEMS = [
   { id: 8, label: '系统设置', icon: Settings, desc: '语言、主题、性能模式' },
 ];
 
-export const MobileTabBar: React.FC<MobileTabBarProps> = ({ currentTab, onSelectTab }) => {
+export const MobileTabBar: React.FC<MobileTabBarProps> = ({ currentTab, onSelectTab, backRef }) => {
   const [moreOpen, setMoreOpen] = useState(false);
   const inMore = MORE_ITEMS.some((it) => it.id === currentTab);
+
+  // v1.6.0：BACK 键先关「更多」抽屉（手机端抽屉是本组件局部状态，父组件看不到）
+  useEffect(() => {
+    if (!backRef) return;
+    backRef.current = () => {
+      if (moreOpen) {
+        setMoreOpen(false);
+        return true;
+      }
+      return false;
+    };
+    return () => {
+      backRef.current = null;
+    };
+  }, [moreOpen, backRef]);
 
   const handleSelect = (id: number) => {
     onSelectTab(id);

@@ -39,6 +39,8 @@ export interface MediaItem {
   isCustomSource?: boolean;
   sourceName?: string;
   sourceProvider?: string;
+  /** 直播同名片道的备用线路（跨源聚合，用于播放失败自动换源） */
+  altSources?: { url: string; sourceName: string }[];
 }
 
 export interface PlaybackProgress {

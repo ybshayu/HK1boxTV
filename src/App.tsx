@@ -147,6 +147,9 @@ export default function App() {
   const [menuPackage, setMenuPackage] = useState<string | null>(null);
   // 应用网格的 D-pad 导航句柄（由 AppsLauncher 赋值，父组件转发方向键）
   const appsNavRef = useRef<((dir: 'up' | 'down' | 'left' | 'right') => void) | null>(null);
+  // v1.6.0：BACK 键先关子组件浮层（应用信息/卸载弹窗、「更多」抽屉）
+  const appsOverlayBackRef = useRef<(() => boolean) | null>(null);
+  const moreDrawerBackRef = useRef<(() => boolean) | null>(null);
   // 各 Tab 上次焦点记忆，切换 Tab 时恢复
   const lastFocusByTab = useRef<Record<number, string>>({});
 
@@ -250,12 +253,54 @@ export default function App() {
   }, []);
 
   // 把各视频源解析出的「真实频道」并入内容列表（替换掉演示用的假直播项）
+  // 同时按规范化频道名跨源聚合：同一频道在多个源里各有一条线路，
+  // 播放失败时可自动切换（altSources），这是「自动换源」的数据基础。
   const liveChannels = useMemo<MediaItem[]>(() => {
     const out: MediaItem[] = [];
+    // 规范化频道名：去掉空格/方括号标记/「频道」后缀/分隔符，统一大写，
+    // 让 CCTV-1综合 / CCTV1 / cctv1[HD] 聚成同一个键
+    const normalizeName = (raw: string): string => {
+      let n = raw.replace(/\s*\[[^\]]*\]\s*/g, ' ').replace(/[\s·・()（）\-—_/]+/g, '');
+      n = n.replace(/频道$/, '');
+      return n.toUpperCase();
+    };
+    // key -> 该频道的所有线路 [{url, sourceName}]（按源顺序，先到先排）
+    const linesByName = new Map<string, { url: string; sourceName: string }[]>();
     for (const s of sources) {
       for (const ch of s.channels || []) {
+        const key = normalizeName(ch.name);
+        if (!key) continue;
+        const arr = linesByName.get(key) || [];
+        if (!arr.some((l) => l.url === ch.streamUrl)) {
+          arr.push({ url: ch.streamUrl, sourceName: s.name });
+        }
+        linesByName.set(key, arr);
+      }
+    }
+    const seen = new Set<string>();
+    // 上次播放成功的手动/自动选线记忆：同名频道优先使用上次可用的线路
+    let linePrefs: Record<string, string> = {};
+    try {
+      linePrefs = JSON.parse(localStorage.getItem('hk1_live_pref') || '{}');
+    } catch {
+      linePrefs = {};
+    }
+    for (const s of sources) {
+      for (const ch of s.channels || []) {
+        const key = normalizeName(ch.name);
+        // 同名频道只保留第一条作为主线路，其余线路挂在 altSources 里
+        const dedupeId = `live-name-${key}`;
+        if (seen.has(dedupeId)) continue;
+        seen.add(dedupeId);
+        const lines = (linesByName.get(key) || []).filter((l) => l.url !== ch.streamUrl);
+        // 若上次可用线路在备用里，把它轮换到最前（自动换源会优先尝试）
+        const preferred = linePrefs[key];
+        if (preferred) {
+          const idx = lines.findIndex((l) => l.url === preferred);
+          if (idx > 0) lines.unshift(...lines.splice(idx, 1));
+        }
         out.push({
-          id: `live-${ch.id}`,
+          id: dedupeId,
           title: ch.name,
           type: 'live',
           category: 'live',
@@ -269,9 +314,10 @@ export default function App() {
           hdrType: 'SDR',
           audio: 'AAC 2.0',
           streamUrl: ch.streamUrl,
-          synopsis: `直播频道「${ch.name}」，来自 ${s.name}`,
+          synopsis: `直播频道「${ch.name}」，来自 ${s.name}${lines.length > 0 ? ` · 另有 ${lines.length} 条备用线路` : ''}`,
           isCustomSource: true,
           sourceName: s.name,
+          altSources: lines.length > 0 ? lines : undefined,
         });
       }
     }
@@ -410,6 +456,34 @@ export default function App() {
     }));
   };
 
+  // 直播自动换源：播放器报致命错误时，切到下一条备用线路（循环轮换）
+  const handleSwitchLiveSource = (reason: string) => {
+    setPlayingMedia((prev) => {
+      if (!prev) return null;
+      const cur = prev.media;
+      if (cur.type !== 'live' || !cur.altSources || cur.altSources.length === 0) return prev;
+      const next = cur.altSources[0];
+      const rotated: MediaItem = {
+        ...cur,
+        streamUrl: next.url,
+        sourceName: next.sourceName,
+        synopsis: `直播频道「${cur.title}」，来自 ${next.sourceName} · 已自动切换线路`,
+        altSources: [...cur.altSources.slice(1), { url: cur.streamUrl, sourceName: cur.sourceName || '上一线路' }],
+      };
+      // 记住切换后的线路，下次播放同名频道优先使用
+      try {
+        const key = cur.title.replace(/\s*\[[^\]]*\]\s*/g, ' ').replace(/[\s·・()（）\-—_/]+/g, '').replace(/频道$/, '').toUpperCase();
+        const prefs = JSON.parse(localStorage.getItem('hk1_live_pref') || '{}');
+        prefs[key] = next.url;
+        localStorage.setItem('hk1_live_pref', JSON.stringify(prefs));
+      } catch {
+        /* 忽略持久化失败 */
+      }
+      setToast(`${reason} · 已自动切换到「${next.sourceName}」的线路`);
+      return { ...prev, media: rotated };
+    });
+  };
+
   // Handle Favorite Toggle
   const handleToggleFavorite = (media: MediaItem) => {
     setFavorites((prev) => {
@@ -458,8 +532,10 @@ export default function App() {
   };
 
   // 统一的 Tab 切换：记住切换前的焦点，进入新 Tab 时恢复上次焦点（无则落在顶部导航）
+  // v1.6.0 修复：切 Tab 时清掉残留的应用操作菜单（此前菜单会在切走再回来时仍然挂着）
   const goToTab = (tab: number) => {
     lastFocusByTab.current[currentTab] = focusedId;
+    setMenuPackage(null);
     setCurrentTab(tab);
     const remembered = lastFocusByTab.current[tab];
     setFocusedId(remembered ?? `nav-tab-${tab}`);
@@ -673,6 +749,19 @@ export default function App() {
       setIsReorderModalOpen(false);
       return;
     }
+    // v1.6.0：BACK 先关各组件自己的浮层（应用信息/卸载弹窗、「更多」抽屉）——
+    // 这些是子组件局部状态，通过 backRef 注册关闭回调，返回 true 表示已消费
+    if (appsOverlayBackRef.current && appsOverlayBackRef.current()) {
+      return;
+    }
+    if (moreDrawerBackRef.current && moreDrawerBackRef.current()) {
+      return;
+    }
+    // 应用操作菜单（⋮）是本组件状态，也要先关
+    if (menuPackage) {
+      closeAppMenu();
+      return;
+    }
     if (currentTab !== 0) {
       setCurrentTab(0);
       setFocusedId('nav-tab-0');
@@ -708,9 +797,48 @@ export default function App() {
   handleRemoteEnterRef.current = handleRemoteEnter;
   const handleRemoteMenuRef = useRef(handleRemoteMenu);
   handleRemoteMenuRef.current = handleRemoteMenu;
+  // v1.6.0 修复：BACK 原来直接捕获首帧 handleRemoteBack（过期闭包），
+  // 导致「应用信息/卸载弹窗打开时按返回」不会先关弹窗而是直接切 Tab
+  const handleRemoteBackRef = useRef(handleRemoteBack);
+  handleRemoteBackRef.current = handleRemoteBack;
+
+  // v1.6.0：原生 DPAD 直通入口。MainActivity.dispatchKeyEvent 拦截方向键后
+  // 通过 evaluateJavascript 调 window.__hk1RemoteKey(dir)，
+  // 绕开「WebView 把 DPAD 吃掉做原生焦点移动、JS 收不到」的问题。
+  // 播放器打开时转发给播放器（__hk1PlayerKey），否则走桌面焦点机。
+  const remoteKeyRef = useRef<(dir: string) => void>(() => {});
+  remoteKeyRef.current = (dir: string) => {
+    const playerKey = (window as any).__hk1PlayerKey;
+    if (playerKey) {
+      playerKey(dir);
+      return;
+    }
+    if (dir === 'center') {
+      handleRemoteEnterRef.current();
+    } else if (dir === 'back') {
+      handleRemoteBackRef.current();
+    } else {
+      handleRemoteDirectionRef.current(dir as 'up' | 'down' | 'left' | 'right');
+    }
+  };
+  useEffect(() => {
+    (window as any).__hk1RemoteKey = (dir: string) => remoteKeyRef.current(dir);
+    return () => {
+      delete (window as any).__hk1RemoteKey;
+    };
+  }, []);
 
   // Keyboard Event Listener for Physical Remote / PC Keyboard
+  // v1.6.0：部分 WebView 不把 DPAD 转成 ArrowDown 等 key 名，只给原始 keyCode →
+  // 用 ANDROID_KEY_BY_CODE 兜底；播放器打开时物理键盘交给播放器自己的监听处理。
   useEffect(() => {
+    const ANDROID_KEY_BY_CODE: Record<number, string> = {
+      20: 'ArrowDown', // KEYCODE_DPAD_DOWN
+      21: 'ArrowUp', // KEYCODE_DPAD_UP
+      22: 'ArrowLeft', // KEYCODE_DPAD_LEFT
+      23: 'Enter', // KEYCODE_DPAD_CENTER
+      66: 'Enter', // KEYCODE_ENTER
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
       // Avoid capturing inside actual text inputs unless D-pad navigation
       if (document.activeElement?.tagName === 'INPUT') {
@@ -720,27 +848,38 @@ export default function App() {
         return;
       }
 
-      if (e.key === 'ArrowUp') {
+      // 播放器打开时：物理键盘由播放器内部的 keydown 监听处理，桌面层不参与，
+      // 避免同一按键被两层逻辑各执行一次（Enter 既切焦点又重播）
+      if ((window as any).__hk1PlayerKey) {
+        return;
+      }
+
+      const key = ANDROID_KEY_BY_CODE[e.keyCode] || e.key;
+
+      if (key === 'ArrowUp') {
         e.preventDefault();
         handleRemoteDirectionRef.current('up');
-      } else if (e.key === 'ArrowDown') {
+      } else if (key === 'ArrowDown') {
         e.preventDefault();
         handleRemoteDirectionRef.current('down');
-      } else if (e.key === 'ArrowLeft') {
+      } else if (key === 'ArrowLeft') {
         e.preventDefault();
         handleRemoteDirectionRef.current('left');
-      } else if (e.key === 'ArrowRight') {
+      } else if (key === 'ArrowRight') {
         e.preventDefault();
         handleRemoteDirectionRef.current('right');
-      } else if (e.key === 'Enter') {
+      } else if (key === 'Enter') {
         e.preventDefault();
         handleRemoteEnterRef.current();
-      } else if (e.key === 'Escape' || e.key === 'Backspace') {
+      } else if (key === 'Escape' || key === 'Backspace') {
         e.preventDefault();
-        handleRemoteBack();
-      } else if (e.key === 'ContextMenu' || e.key === 'm' || e.key === 'M') {
+        handleRemoteBackRef.current();
+      } else if (key === 'ContextMenu' || key === 'm' || key === 'M') {
         e.preventDefault();
         handleRemoteMenuRef.current();
+      } else {
+        // 便于 logcat 诊断：遥控器键码差异排查（[RemoteKey] 前缀）
+        console.log('[RemoteKey] unhandled', e.key, e.keyCode);
       }
     };
 
@@ -973,6 +1112,7 @@ export default function App() {
               onCloseMenu={closeAppMenu}
               onFocusItem={setFocusedId}
               navRef={appsNavRef}
+              backRef={appsOverlayBackRef}
             />
           )}
 
@@ -1050,6 +1190,7 @@ export default function App() {
           <MobileTabBar
             currentTab={currentTab}
             onSelectTab={(idx) => goToTab(idx)}
+            backRef={moreDrawerBackRef}
           />
         )}
       </div>
@@ -1079,6 +1220,7 @@ export default function App() {
           episodeId={playingMedia.episodeId}
           onClose={() => setPlayingMedia(null)}
           onProgressUpdate={handleProgressUpdate}
+          onRequestSwitchSource={handleSwitchLiveSource}
           language={language}
         />
       )}
