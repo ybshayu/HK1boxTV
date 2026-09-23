@@ -543,23 +543,143 @@ public class AppManagerPlugin extends Plugin {
         });
     }
 
-    private long dirSize(File dir) {
-        if (dir == null || !dir.exists()) return 0;
-        long size = 0;
-        try {
-            File[] files = dir.listFiles();
-            if (files == null) return 0;
-            for (File f : files) {
-                size += f.isDirectory() ? dirSize(f) : f.length();
-            }
-        } catch (Exception ignored) {
-        }
-        return size;
+  private long dirSize(File dir) {
+    if (dir == null || !dir.exists()) return 0;
+    long size = 0;
+    try {
+      File[] files = dir.listFiles();
+      if (files == null) return 0;
+      for (File f : files) {
+        size += f.isDirectory() ? dirSize(f) : f.length();
+      }
+    } catch (Exception ignored) {
     }
+    return size;
+  }
 
-    // ------------------------------------------------------------------
-    // 监听安装 / 卸载 / 更新，主动通知前端刷新
-    // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // 应用详情（版本 / 安装时间 / 权限数 / 路径等）
+  // ------------------------------------------------------------------
+  @PluginMethod
+  public void getAppInfo(final PluginCall call) {
+    final String pkg = call.getString("packageName");
+    if (pkg == null || pkg.length() == 0) {
+      call.reject("缺少 packageName");
+      return;
+    }
+    runAsync(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          PackageManager pm = getContext().getPackageManager();
+          PackageInfo pi = pm.getPackageInfo(pkg, PackageManager.GET_PERMISSIONS);
+          JSObject o = new JSObject();
+          o.put("packageName", pkg);
+          o.put("versionName",
+                  pi.versionName != null ? pi.versionName : "");
+          o.put("versionCode",
+                  Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                          ? pi.getLongVersionCode()
+                          : pi.versionCode);
+          o.put("firstInstallTime", pi.firstInstallTime);
+          o.put("lastUpdateTime", pi.lastUpdateTime);
+          o.put("sourceDir",
+                  pi.applicationInfo != null && pi.applicationInfo.sourceDir != null
+                          ? pi.applicationInfo.sourceDir : "");
+          o.put("isSystem",
+                  pi.applicationInfo != null
+                          && ((pi.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0
+                              || (pi.applicationInfo.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0));
+          o.put("launchable", pm.getLaunchIntentForPackage(pkg) != null);
+          int permCount = 0;
+          if (pi.requestedPermissions != null) permCount = pi.requestedPermissions.length;
+          o.put("permissionsCount", permCount);
+          resolveOnUi(call, o);
+        } catch (Exception e) {
+          rejectOnUi(call, "读取应用信息失败: " + e.getMessage());
+        }
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 打开系统「应用信息」页（无需任何权限，用户可在此强制停止 / 清数据 / 卸载）
+  // ------------------------------------------------------------------
+  @PluginMethod
+  public void openAppSettings(final PluginCall call) {
+    final String pkg = call.getString("packageName");
+    if (pkg == null || pkg.length() == 0) {
+      call.reject("缺少 packageName");
+      return;
+    }
+    runOnUi(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          Intent intent = new Intent(
+                  android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+          intent.setData(Uri.parse("package:" + pkg));
+          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+          getContext().startActivity(intent);
+          call.resolve();
+        } catch (Exception e) {
+          call.reject("无法打开应用信息页: " + e.getMessage());
+        }
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 强制停止：普通应用没有 FORCE_STOP_PACKAGES 权限，ActivityManager.forceStopPackage
+  // 必然抛 SecurityException；因此走 root 的 `am force-stop`，无 root 时回退到
+  // 打开系统「应用信息」页，由用户手动强制停止。
+  // ------------------------------------------------------------------
+  @PluginMethod
+  public void forceStop(final PluginCall call) {
+    final String pkg = call.getString("packageName");
+    if (pkg == null || pkg.length() == 0) {
+      call.reject("缺少 packageName");
+      return;
+    }
+    runAsync(new Runnable() {
+      @Override
+      public void run() {
+        if (hasRoot()) {
+          String out = runSu("am force-stop " + pkg, 15000);
+          if (out != null) {
+            JSObject ret = new JSObject();
+            ret.put("mode", "root");
+            ret.put("success", true);
+            resolveOnUi(call, ret);
+            return;
+          }
+        }
+        // 回退：打开系统应用信息页
+        runOnUi(new Runnable() {
+          @Override
+          public void run() {
+            try {
+              Intent intent = new Intent(
+                      android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+              intent.setData(Uri.parse("package:" + pkg));
+              intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+              getContext().startActivity(intent);
+              JSObject ret = new JSObject();
+              ret.put("mode", "settings");
+              ret.put("success", true);
+              resolveOnUi(call, ret);
+            } catch (Exception e) {
+              rejectOnUi(call, "无法强制停止: " + e.getMessage());
+            }
+          }
+        });
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // 监听安装 / 卸载 / 更新，主动通知前端刷新
+  // ------------------------------------------------------------------
     @PluginMethod
     public void startWatching(PluginCall call) {
         if (watching) {

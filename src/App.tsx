@@ -6,7 +6,8 @@ import {
   PlaybackProgress, 
   ChannelShelfConfig, 
   SupportedLanguage, 
-  DisplayTheme 
+  DisplayTheme, 
+  TVApp 
 } from './types';
 import { mockMediaList } from './data/mockMedia';
 import { initialVideoSources } from './data/mockSources';
@@ -18,10 +19,12 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { fetchM3U, ONLINE_SOURCE, toSource } from './services/iptv';
 import { useDouban } from './hooks/useDouban';
 import { useInstalledApps } from './hooks/useInstalledApps';
+import { launchInstalledApp } from './services/appManager';
 import { doubanListToMedia } from './utils/mediaMapper';
 import { MOVIE_LISTS, SERIES_LISTS } from './services/douban';
 import { useDeviceMode } from './hooks/useDeviceMode';
 import { MobileTabBar } from './components/MobileTabBar';
+import { Star, Tv } from 'lucide-react';
 
 // Components
 import { NavigationHeader } from './components/NavigationHeader';
@@ -35,6 +38,53 @@ import { MediaDetailModal } from './components/MediaDetailModal';
 import { VideoPlayer } from './components/VideoPlayer';
 import { ChannelReorderModal } from './components/ChannelReorderModal';
 import { UpdatePromptModal } from './components/UpdatePromptModal';
+
+const AppFavoritesDock: React.FC<{
+  items: TVApp[];
+  icons: Record<string, string>;
+  focusedId: string;
+  onFocusItem: (id: string) => void;
+  onLaunch: (packageName: string) => void;
+  onAskMenu: (packageName: string) => void;
+}> = ({ items, icons, focusedId, onFocusItem, onLaunch, onAskMenu }) => {
+  if (items.length === 0) return null;
+  return (
+    <div className="px-8 pt-4">
+      <h3 className="flex items-center gap-2 text-sm font-bold text-white/80 mb-3">
+        <Star className="w-4 h-4 text-amber-400" />
+        <span>常用应用</span>
+        <span className="text-[10px] font-normal text-white/40">{items.length} 个</span>
+      </h3>
+      <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+        {items.map((app) => (
+          <button
+            key={app.id}
+            id={`appfav-${app.packageName}`}
+            onClick={() => onLaunch(app.packageName)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onAskMenu(app.packageName);
+            }}
+            className={`flex flex-col items-center gap-1.5 w-20 shrink-0 rounded-2xl p-2.5 border transition cursor-pointer ${
+              focusedId === `appfav-${app.packageName}`
+                ? 'border-white ring-2 ring-white/90 bg-neutral-800'
+                : 'border-white/10 bg-white/5 hover:bg-white/10'
+            }`}
+          >
+            <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden">
+              {icons[app.packageName] ? (
+                <img src={icons[app.packageName]} alt="" className="w-full h-full object-contain" />
+              ) : (
+                <Tv className="w-6 h-6 text-white/60" />
+              )}
+            </div>
+            <span className="text-[10px] text-white/70 truncate w-full text-center">{app.name}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 export default function App() {
   // Navigation & View State
@@ -84,6 +134,28 @@ export default function App() {
     return saved ? JSON.parse(saved) : ['m-oppenheimer', 's-three-body', 'live-cctv1-4k'];
   });
 
+  // 应用库：常用（收藏）与隐藏，纯前端元数据，只存 localStorage（不持久化真实存储信息）
+  const [appFavorites, setAppFavorites] = useState<string[]>(() => {
+    const saved = localStorage.getItem('hk1_app_favorites');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [appHidden, setAppHidden] = useState<string[]>(() => {
+    const saved = localStorage.getItem('hk1_hidden_apps');
+    return saved ? JSON.parse(saved) : [];
+  });
+  // 当前打开操作菜单的应用包名（由父组件统一管理，便于遥控器 MENU 键与卡片菜单共用）
+  const [menuPackage, setMenuPackage] = useState<string | null>(null);
+  // 应用网格的 D-pad 导航句柄（由 AppsLauncher 赋值，父组件转发方向键）
+  const appsNavRef = useRef<((dir: 'up' | 'down' | 'left' | 'right') => void) | null>(null);
+  // 各 Tab 上次焦点记忆，切换 Tab 时恢复
+  const lastFocusByTab = useRef<Record<number, string>>({});
+
+  // 首页「常用应用」Dock 真实渲染项（过滤掉已卸载的）
+  const appFavItems = useMemo(
+    () => appFavorites.map((p) => apps.find((a) => a.packageName === p)).filter((a): a is TVApp => !!a),
+    [appFavorites, apps]
+  );
+
   // Home Shelves Ordering —— 除「继续观看 / 直播」外，其余均为豆瓣实时榜单
   const [shelves, setShelves] = useState<ChannelShelfConfig[]>([
     { id: 'sh-resume', key: 'continueWatching', titleKey: 'shelf.continueWatching', order: 0, isVisible: true },
@@ -132,6 +204,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('hk1_favorites', JSON.stringify(favorites));
   }, [favorites]);
+
+  useEffect(() => {
+    localStorage.setItem('hk1_app_favorites', JSON.stringify(appFavorites));
+  }, [appFavorites]);
+
+  useEffect(() => {
+    localStorage.setItem('hk1_hidden_apps', JSON.stringify(appHidden));
+  }, [appHidden]);
 
   // 存储信息来自原生实时统计，不再本地持久化（持久化会造成读到过期的假数据）
 
@@ -340,6 +420,51 @@ export default function App() {
     });
   };
 
+  // 应用库：常用（收藏）切换
+  const toggleAppFavorite = (packageName: string, name: string) => {
+    const wasFav = appFavorites.includes(packageName);
+    setAppFavorites((prev) =>
+      wasFav ? prev.filter((p) => p !== packageName) : [...prev, packageName]
+    );
+    setToast(`已${wasFav ? '取消常用' : '加入常用'}「${name}」`);
+  };
+
+  // 应用库：隐藏切换
+  const toggleAppHidden = (packageName: string, name: string) => {
+    const wasHidden = appHidden.includes(packageName);
+    setAppHidden((prev) =>
+      wasHidden ? prev.filter((p) => p !== packageName) : [...prev, packageName]
+    );
+    setToast(`已${wasHidden ? '取消隐藏' : '隐藏'}「${name}」`);
+  };
+
+  // 应用库：打开 / 关闭操作菜单（统一由父组件管理，便于遥控器 MENU 键）
+  const askAppMenu = (packageName: string) => setMenuPackage(packageName);
+  const closeAppMenu = () => setMenuPackage(null);
+
+  // 启动应用（首页常用 Dock / 应用库卡片共用）
+  const handleLaunchApp = async (packageName: string) => {
+    const app = apps.find((a) => a.packageName === packageName);
+    if (!app) return;
+    if (!app.launchable) {
+      setToast(`「${app.name}」没有可打开的界面`);
+      return;
+    }
+    try {
+      await launchInstalledApp(packageName);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : `无法启动「${app.name}」`);
+    }
+  };
+
+  // 统一的 Tab 切换：记住切换前的焦点，进入新 Tab 时恢复上次焦点（无则落在顶部导航）
+  const goToTab = (tab: number) => {
+    lastFocusByTab.current[currentTab] = focusedId;
+    setCurrentTab(tab);
+    const remembered = lastFocusByTab.current[tab];
+    setFocusedId(remembered ?? `nav-tab-${tab}`);
+  };
+
   // 真实清理：清空 CacheStorage 与 sessionStorage，然后重新拉取原生统计
   const handleCleanCache = async () => {
     setIsCleaningCache(true);
@@ -375,6 +500,28 @@ export default function App() {
   const handleRemoteDirection = (direction: 'up' | 'down' | 'left' | 'right') => {
     if (playingMedia) return; // Handled inside player
 
+    // 应用网格的 D-pad 由 AppsLauncher 接管（它掌握真实的 visibleApps 与列数）
+    if (focusedId.startsWith('app-card-') && appsNavRef.current) {
+      appsNavRef.current(direction);
+      return;
+    }
+    // 首页「常用应用」Dock 的左右移动 / 上下进出
+    if (focusedId.startsWith('appfav-')) {
+      const pkg = focusedId.replace('appfav-', '');
+      const idx = appFavItems.findIndex((a) => a.packageName === pkg);
+      if (idx < 0) return;
+      if (direction === 'left') {
+        if (idx > 0) setFocusedId(`appfav-${appFavItems[idx - 1].packageName}`);
+        return;
+      }
+      if (direction === 'right') {
+        if (idx < appFavItems.length - 1) setFocusedId(`appfav-${appFavItems[idx + 1].packageName}`);
+        return;
+      }
+      if (direction === 'up') { setFocusedId('nav-tab-0'); return; }
+      if (direction === 'down') { setFocusedId('btn-hero-play-now'); return; }
+    }
+
     if (activeMedia) {
       // In Detail Modal
       if (direction === 'left') {
@@ -396,7 +543,8 @@ export default function App() {
     } else if (direction === 'down') {
       // Move into first item of current view
       if (currentTab === 0) {
-        setFocusedId('btn-hero-play-now');
+        // 优先落进首页「常用应用」Dock，没有则进主推荐位
+        setFocusedId(appFavItems.length > 0 ? `appfav-${appFavItems[0].packageName}` : 'btn-hero-play-now');
       } else if (currentTab === 1) {
         const first = mediaList.find((m) => m.type === 'live' || m.category === 'live');
         if (first) setFocusedId(`card-${first.id}`);
@@ -420,8 +568,7 @@ export default function App() {
     } else if (direction === 'left') {
       if (focusedId.startsWith('nav-tab-')) {
         const nextTab = Math.max(0, currentTab - 1);
-        setCurrentTab(nextTab);
-        setFocusedId(`nav-tab-${nextTab}`);
+        goToTab(nextTab);
       } else if (focusedId.startsWith('card-')) {
         const curMediaId = focusedId.replace('card-', '');
         let activeList = mediaList;
@@ -438,8 +585,7 @@ export default function App() {
     } else if (direction === 'right') {
       if (focusedId.startsWith('nav-tab-')) {
         const nextTab = Math.min(8, currentTab + 1);
-        setCurrentTab(nextTab);
-        setFocusedId(`nav-tab-${nextTab}`);
+        goToTab(nextTab);
       } else if (focusedId.startsWith('card-')) {
         const curMediaId = focusedId.replace('card-', '');
         let activeList = mediaList;
@@ -486,6 +632,16 @@ export default function App() {
         setActiveMedia(spotlight);
         setDetailFocusedBtn(0);
       }
+    }
+    if (focusedId.startsWith('app-card-')) {
+      const id = focusedId.replace('app-card-', '');
+      const app = apps.find((a) => a.id === id);
+      if (app) handleLaunchApp(app.packageName);
+      return;
+    }
+    if (focusedId.startsWith('appfav-')) {
+      handleLaunchApp(focusedId.replace('appfav-', ''));
+      return;
     } else if (focusedId.startsWith('card-')) {
       const mediaId = focusedId.replace('card-', '');
       const found = mediaList.find((m) => m.id === mediaId);
@@ -524,6 +680,16 @@ export default function App() {
   };
 
   const handleRemoteMenu = () => {
+    if (focusedId.startsWith('app-card-')) {
+      const id = focusedId.replace('app-card-', '');
+      const app = apps.find((a) => a.id === id);
+      if (app) askAppMenu(app.packageName);
+      return;
+    }
+    if (focusedId.startsWith('appfav-')) {
+      askAppMenu(focusedId.replace('appfav-', ''));
+      return;
+    }
     if (focusedId.startsWith('card-')) {
       const mediaId = focusedId.replace('card-', '');
       const found = mediaList.find((m) => m.id === mediaId);
@@ -534,6 +700,14 @@ export default function App() {
       setIsReorderModalOpen(true);
     }
   };
+
+  // 用 ref 持有最新的方向 / 确认 / 菜单处理函数，避免 keydown 监听闭包拿到过期状态
+  const handleRemoteDirectionRef = useRef(handleRemoteDirection);
+  handleRemoteDirectionRef.current = handleRemoteDirection;
+  const handleRemoteEnterRef = useRef(handleRemoteEnter);
+  handleRemoteEnterRef.current = handleRemoteEnter;
+  const handleRemoteMenuRef = useRef(handleRemoteMenu);
+  handleRemoteMenuRef.current = handleRemoteMenu;
 
   // Keyboard Event Listener for Physical Remote / PC Keyboard
   useEffect(() => {
@@ -548,31 +722,39 @@ export default function App() {
 
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        handleRemoteDirection('up');
+        handleRemoteDirectionRef.current('up');
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        handleRemoteDirection('down');
+        handleRemoteDirectionRef.current('down');
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        handleRemoteDirection('left');
+        handleRemoteDirectionRef.current('left');
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        handleRemoteDirection('right');
+        handleRemoteDirectionRef.current('right');
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        handleRemoteEnter();
+        handleRemoteEnterRef.current();
       } else if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault();
         handleRemoteBack();
       } else if (e.key === 'ContextMenu' || e.key === 'm' || e.key === 'M') {
         e.preventDefault();
-        handleRemoteMenu();
+        handleRemoteMenuRef.current();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [focusedId, currentTab, activeMedia, playingMedia, isUpdateModalOpen, isReorderModalOpen, mediaList, detailFocusedBtn]);
+  }, []);
+
+  // 焦点变化自动滚入可视区（仅针对应用卡片 / 首页常用 Dock，避免影响媒体墙已有的滚动）
+  useEffect(() => {
+    if (focusedId.startsWith('app-card-') || focusedId.startsWith('appfav-')) {
+      const el = document.getElementById(focusedId);
+      if (el) el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    }
+  }, [focusedId]);
 
   // 性能模式：挂到 html[data-perf]，由 index.css 统一关闭高开销的模糊与循环动画
   useEffect(() => {
@@ -648,7 +830,16 @@ export default function App() {
         <main className="flex-1 min-h-0 overflow-y-auto no-scrollbar">
           {/* Tab 0: Home Shelves */}
           {currentTab === 0 && (
-            <HomeShelvesView
+            <>
+              <AppFavoritesDock
+                items={appFavItems}
+                icons={installed.icons}
+                focusedId={focusedId}
+                onFocusItem={setFocusedId}
+                onLaunch={handleLaunchApp}
+                onAskMenu={askAppMenu}
+              />
+              <HomeShelvesView
               mediaList={mediaList}
               shelves={shelves}
               progressMap={progressMap}
@@ -672,6 +863,7 @@ export default function App() {
               doubanLoading={doubanLoading}
               onRefresh={refreshDouban}
             />
+            </>
           )}
 
           {/* Tab 1: Live TV (央视与卫视超高清直播) */}
@@ -772,6 +964,15 @@ export default function App() {
               isCleaningCache={isCleaningCache}
               focusedId={focusedId}
               language={language}
+              favorites={appFavorites}
+              hiddenApps={appHidden}
+              onToggleFavorite={toggleAppFavorite}
+              onToggleHidden={toggleAppHidden}
+              menuPackage={menuPackage}
+              onAskMenu={askAppMenu}
+              onCloseMenu={closeAppMenu}
+              onFocusItem={setFocusedId}
+              navRef={appsNavRef}
             />
           )}
 
@@ -848,10 +1049,7 @@ export default function App() {
         {isMobile && (
           <MobileTabBar
             currentTab={currentTab}
-            onSelectTab={(idx) => {
-              setCurrentTab(idx);
-              setFocusedId(`nav-tab-${idx}`);
-            }}
+            onSelectTab={(idx) => goToTab(idx)}
           />
         )}
       </div>

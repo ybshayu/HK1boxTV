@@ -108,6 +108,11 @@ jobs:
       - name: 注入 release 签名配置 (build.gradle)
         run: python3 scripts/patch-android-signing.py
 
+      # 版本号跟随 tag（vX.Y.Z）或本地 package.json：写入 build.gradle 的
+      # versionName / versionCode，保证 APK 版本号随发布自动递增。
+      - name: 注入 APK 版本号 (build.gradle)
+        run: python3 scripts/patch-version.py
+
       - name: 还原签名密钥 (如配置了 Secrets)
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

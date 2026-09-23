@@ -38,6 +38,23 @@ export interface RealStorage {
   appFilesBytes: number;
 }
 
+/** 应用详情（来自 getAppInfo，用于「应用信息」弹窗） */
+export interface AppInfo {
+  packageName: string;
+  versionName: string;
+  versionCode: number;
+  /** 首次安装时间（毫秒时间戳） */
+  firstInstallTime: number;
+  /** 最近更新时间（毫秒时间戳） */
+  lastUpdateTime: number;
+  /** APK 安装路径 */
+  sourceDir: string;
+  isSystem: boolean;
+  launchable: boolean;
+  /** 申请的权限数量 */
+  permissionsCount: number;
+}
+
 interface AppManagerNative {
   listApps(): Promise<{
     apps: InstalledApp[];
@@ -52,6 +69,9 @@ interface AppManagerNative {
     allowRoot?: boolean;
   }): Promise<{ mode: 'silent' | 'system'; success: boolean }>;
   getStorage(): Promise<RealStorage>;
+  getAppInfo(options: { packageName: string }): Promise<AppInfo>;
+  forceStop(options: { packageName: string }): Promise<{ mode: 'root' | 'settings'; success: boolean }>;
+  openAppSettings(options: { packageName: string }): Promise<void>;
   startWatching(): Promise<void>;
   stopWatching(): Promise<void>;
   addListener(
@@ -112,6 +132,38 @@ export async function fetchStorage(): Promise<RealStorage | null> {
   } catch {
     return null;
   }
+}
+
+/** 应用详情（版本 / 安装时间 / 权限数 / 路径等） */
+export async function fetchAppInfo(packageName: string): Promise<AppInfo | null> {
+  if (!isAppManagerAvailable()) return null;
+  try {
+    return await Native.getAppInfo({ packageName });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 强制停止应用。
+ * 已 root 的设备走 `am force-stop` 静默停止；无 root 时回退为打开系统「应用信息」页
+ * （普通应用没有 FORCE_STOP_PACKAGES 权限，无法直接停止其它应用）。
+ */
+export async function forceStopApp(
+  packageName: string
+): Promise<{ mode: 'root' | 'settings'; success: boolean }> {
+  if (!isAppManagerAvailable()) {
+    throw new Error('网页预览模式无法操作设备应用，请安装 APK 后使用');
+  }
+  return Native.forceStop({ packageName });
+}
+
+/** 打开系统「应用信息」页（用户可在此强制停止 / 清数据 / 卸载） */
+export async function openAppSettings(packageName: string): Promise<void> {
+  if (!isAppManagerAvailable()) {
+    throw new Error('网页预览模式无法打开系统设置，请安装 APK 后使用');
+  }
+  await Native.openAppSettings({ packageName });
 }
 
 /** 开始监听系统安装 / 卸载 / 更新广播 */

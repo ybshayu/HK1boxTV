@@ -2,12 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { TVApp, StorageInfo, SupportedLanguage } from '../types';
 import { translations } from '../i18n/translations';
 import {
+  fetchAppInfo,
+  forceStopApp,
   launchInstalledApp,
+  openAppSettings,
   uninstallInstalledApp,
+  type AppInfo,
 } from '../services/appManager';
 import {
   AlertTriangle,
+  AppWindow,
+  Ban,
+  Calendar,
   CheckCircle2,
+  Clock,
+  Eye,
+  EyeOff,
   Film,
   Folder,
   Gamepad2,
@@ -15,13 +25,17 @@ import {
   HardDrive,
   Info,
   Loader2,
+  MoreVertical,
+  Package,
   Play,
   PlayCircle,
   RefreshCw,
   Search,
   Server,
   Settings,
+  ShieldCheck,
   Sparkles,
+  Star,
   Trash2,
   Tv,
   Video,
@@ -44,12 +58,27 @@ interface AppsLauncherProps {
   isCleaningCache: boolean;
   focusedId: string;
   language: SupportedLanguage;
+  /** 常用应用（收藏）的包名列表，顺序即排序 */
+  favorites: string[];
+  /** 已隐藏应用的包名列表 */
+  hiddenApps: string[];
+  onToggleFavorite: (packageName: string, name: string) => void;
+  onToggleHidden: (packageName: string, name: string) => void;
+  /** 当前打开操作菜单的应用包名（由父组件统一管理，便于遥控器 MENU 键触发） */
+  menuPackage: string | null;
+  onAskMenu: (packageName: string) => void;
+  onCloseMenu: () => void;
+  /** 焦点变化回写父组件（原生 D-pad 移动后同步 focusedId） */
+  onFocusItem: (id: string) => void;
+  /** 原生 D-pad 方向键导航句柄：父组件把方向交给本组件计算下一焦点 */
+  navRef?: React.MutableRefObject<((dir: 'up' | 'down' | 'left' | 'right') => void) | null>;
 }
 
-type CategoryKey = 'all' | 'user' | 'media' | 'games' | 'tools' | 'system';
+type CategoryKey = 'all' | 'fav' | 'user' | 'media' | 'games' | 'tools' | 'system';
 
 const CATEGORY_LABELS: { key: CategoryKey; label: string }[] = [
   { key: 'all', label: '全部' },
+  { key: 'fav', label: '常用' },
   { key: 'user', label: '用户应用' },
   { key: 'media', label: '影音' },
   { key: 'games', label: '游戏' },
@@ -75,6 +104,21 @@ function formatTime(ts: number | null): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+function formatDate(ts: number | undefined | null): string {
+  if (!ts) return '未知';
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 运行时读取 CSS grid 实际列数（响应式断点不同，列数会变） */
+function gridColumnCount(el: HTMLElement | null): number {
+  if (!el) return 1;
+  const cols = getComputedStyle(el).gridTemplateColumns;
+  if (cols && cols.trim() !== '') return cols.split(' ').filter(Boolean).length;
+  return 1;
+}
+
 /** 单个应用卡片：负责按需拉取真实图标并做 content-visibility 屏外优化 */
 const AppCard: React.FC<{
   app: TVApp;
@@ -82,13 +126,15 @@ const AppCard: React.FC<{
   isFocused: boolean;
   onRequestIcon: (pkg: string) => void;
   onLaunch: (app: TVApp) => void;
-  onAskUninstall: (app: TVApp) => void;
-}> = ({ app, iconUrl, isFocused, onRequestIcon, onLaunch, onAskUninstall }) => {
+  /** 改为传包名：菜单状态由父组件统一管理，AppCard 只负责「请求打开某应用的菜单」 */
+  onAskMenu: (packageName: string) => void;
+}> = ({ app, iconUrl, isFocused, onRequestIcon, onLaunch, onAskMenu }) => {
   const ref = useRef<HTMLDivElement | null>(null);
+  // 长按（触屏）计时器；触发后标记 longPressed，避免松手时又触发一次点击启动
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressed = useRef<boolean>(false);
 
   // 图标懒加载：只有接近视口的卡片才去原生取图标。
-  // 设备上动辄几百个应用，全量取图标（每个都是一次跨桥的 base64 传输）
-  // 在盒子上会明显拖慢首次进入。
   useEffect(() => {
     if (iconUrl) return;
     const el = ref.current;
@@ -111,6 +157,21 @@ const AppCard: React.FC<{
     io.observe(el);
     return () => io.disconnect();
   }, [app.packageName, iconUrl, onRequestIcon]);
+
+  const clearLongPress = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const startLongPress = () => {
+    clearLongPress();
+    longPressTimer.current = setTimeout(() => {
+      longPressed.current = true;
+      onAskMenu(app.packageName);
+    }, 500);
+  };
 
   const FallbackIcon = () => {
     switch (app.icon) {
@@ -139,7 +200,16 @@ const AppCard: React.FC<{
     <div
       ref={ref}
       id={`app-card-${app.id}`}
-      onClick={() => onLaunch(app)}
+      onClick={() => {
+        if (longPressed.current) {
+          longPressed.current = false;
+          return;
+        }
+        onLaunch(app);
+      }}
+      onPointerDown={startLongPress}
+      onPointerUp={clearLongPress}
+      onPointerLeave={clearLongPress}
       style={{ contentVisibility: 'auto', containIntrinsicSize: '150px' }}
       className={`group relative p-3.5 rounded-3xl border transition-colors duration-200 cursor-pointer tv-focusable bg-neutral-900/90 text-left ${
         isFocused
@@ -178,7 +248,23 @@ const AppCard: React.FC<{
             </>
           )}
         </div>
+        {!app.launchable && (
+          <div className="text-[9px] text-amber-400/70 mt-0.5">无独立界面</div>
+        )}
       </div>
+
+      {/* 操作菜单按钮（长按 / 遥控器聚焦后按 OK 打开菜单） */}
+      <button
+        id={`btn-appmenu-${app.id}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onAskMenu(app.packageName);
+        }}
+        className="absolute top-2.5 left-2.5 p-1.5 rounded-xl bg-black/50 border border-white/10 text-white/50 hover:bg-white/15 hover:text-white transition cursor-pointer"
+        title={`${app.name} 操作菜单`}
+      >
+        <MoreVertical className="w-3.5 h-3.5" />
+      </button>
 
       {/* 卸载按钮：常显（手机没有 hover，不能靠 hover 露出） */}
       {canUninstall && (
@@ -186,19 +272,13 @@ const AppCard: React.FC<{
           id={`btn-uninstall-${app.id}`}
           onClick={(e) => {
             e.stopPropagation();
-            onAskUninstall(app);
+            onAskMenu(app.packageName);
           }}
           className="absolute top-2.5 right-2.5 p-1.5 rounded-xl bg-black/50 border border-white/10 text-white/50 hover:bg-red-500/25 hover:text-red-300 hover:border-red-400/40 transition cursor-pointer"
           title={`卸载 ${app.name}`}
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>
-      )}
-
-      {!app.launchable && (
-        <div className="absolute top-2.5 left-2.5 p-1 rounded-lg bg-black/50 border border-white/10 text-white/40" title="该应用没有可打开的界面">
-          <Info className="w-3 h-3" />
-        </div>
       )}
     </div>
   );
@@ -218,14 +298,40 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
   isCleaningCache,
   focusedId,
   language,
+  favorites,
+  hiddenApps,
+  onToggleFavorite,
+  onToggleHidden,
+  menuPackage,
+  onAskMenu,
+  onCloseMenu,
+  onFocusItem,
+  navRef,
 }) => {
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const [appToUninstall, setAppToUninstall] = useState<TVApp | null>(null);
+  const [appInfo, setAppInfo] = useState<{ app: TVApp; info: AppInfo | null; loading: boolean } | null>(null);
+  // 操作菜单由父组件统一管理（menuPackage），便于遥控器 MENU 键与卡片长按/「⋯」按钮共用
+  const appToMenu = useMemo(
+    () => (menuPackage ? apps.find((a) => a.packageName === menuPackage) ?? null : null),
+    [menuPackage, apps]
+  );
   const [isUninstalling, setIsUninstalling] = useState<boolean>(false);
+  const [actionBusy, setActionBusy] = useState<boolean>(false);
   const [toast, setToast] = useState<string | null>(null);
   const [category, setCategory] = useState<CategoryKey>('all');
   const [keyword, setKeyword] = useState<string>('');
+  const [showHidden, setShowHidden] = useState<boolean>(false);
 
   const t = translations[language];
+
+  const favoritesSet = useMemo(() => new Set(favorites), [favorites]);
+  const hiddenSet = useMemo(() => new Set(hiddenApps), [hiddenApps]);
+  const favOrder = useMemo(() => {
+    const m = new Map<string, number>();
+    favorites.forEach((pkg, i) => m.set(pkg, i));
+    return m;
+  }, [favorites]);
 
   const totalGB = formatGB(storage.totalMB);
   const systemGB = formatGB(storage.systemMB);
@@ -242,10 +348,11 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
     window.setTimeout(() => setToast(null), 3200);
   };
 
-  // 各分类的真实数量
+  // 各分类的真实数量（隐藏的不计入总数）
   const counts = useMemo(() => {
     const c: Record<CategoryKey, number> = {
-      all: apps.length,
+      all: 0,
+      fav: 0,
       user: 0,
       media: 0,
       games: 0,
@@ -253,6 +360,9 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
       system: 0,
     };
     for (const a of apps) {
+      if (hiddenSet.has(a.packageName)) continue;
+      c.all += 1;
+      if (favoritesSet.has(a.packageName)) c.fav += 1;
       if (!a.isSystem) c.user += 1;
       if (a.category === 'media') c.media += 1;
       else if (a.category === 'games') c.games += 1;
@@ -260,22 +370,73 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
       else if (a.category === 'system') c.system += 1;
     }
     return c;
-  }, [apps]);
+  }, [apps, hiddenSet, favoritesSet]);
 
   const visibleApps = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
-    return apps.filter((a) => {
-      if (category === 'user' && a.isSystem) return false;
-      if (category === 'media' && a.category !== 'media') return false;
-      if (category === 'games' && a.category !== 'games') return false;
-      if (category === 'tools' && a.category !== 'tools') return false;
-      if (category === 'system' && a.category !== 'system') return false;
+    let list = apps.filter((a) => {
+      // 已隐藏且未开启「显示已隐藏」时，不显示
+      if (hiddenSet.has(a.packageName) && !showHidden) return false;
+      if (category === 'fav') {
+        // 常用：只显示收藏的，且未隐藏（除非 showHidden）
+        if (!favoritesSet.has(a.packageName)) return false;
+        if (hiddenSet.has(a.packageName)) return false;
+      } else if (category === 'user' && a.isSystem) return false;
+      else if (category === 'media' && a.category !== 'media') return false;
+      else if (category === 'games' && a.category !== 'games') return false;
+      else if (category === 'tools' && a.category !== 'tools') return false;
+      else if (category === 'system' && a.category !== 'system') return false;
       if (!kw) return true;
       return (
         a.name.toLowerCase().includes(kw) || a.packageName.toLowerCase().includes(kw)
       );
     });
-  }, [apps, category, keyword]);
+    // 常用分类：按收藏顺序排序
+    if (category === 'fav') {
+      list = [...list].sort((a, b) => {
+        const ia = favOrder.has(a.packageName) ? favOrder.get(a.packageName)! : 9999;
+        const ib = favOrder.has(b.packageName) ? favOrder.get(b.packageName)! : 9999;
+        return ia - ib;
+      });
+    }
+    return list;
+  }, [apps, category, keyword, hiddenSet, showHidden, favoritesSet, favOrder]);
+
+  // 把「应用网格」的 D-pad 方向键导航交给父组件调用：
+  // 父组件的 handleRemoteDirection 在 focusedId 以 app-card- 开头时，
+  // 直接调用 navRef.current(dir)，由本组件依据真实 visibleApps 与列数计算下一焦点。
+  useEffect(() => {
+    if (!navRef) return;
+    navRef.current = (dir: 'up' | 'down' | 'left' | 'right') => {
+      if (!focusedId.startsWith('app-card-')) return;
+      const id = focusedId.slice('app-card-'.length);
+      const idx = visibleApps.findIndex((a) => a.id === id);
+      if (idx < 0) return;
+      const len = visibleApps.length;
+      const cols = gridColumnCount(gridRef.current);
+      let next = idx;
+      if (dir === 'left') {
+        if (idx % cols !== 0) next = idx - 1;
+        else return;
+      } else if (dir === 'right') {
+        if ((idx + 1) % cols !== 0 && idx + 1 < len) next = idx + 1;
+        else return;
+      } else if (dir === 'up') {
+        if (idx - cols >= 0) next = idx - cols;
+        else {
+          onFocusItem('nav-tab-5');
+          return;
+        }
+      } else if (dir === 'down') {
+        if (idx + cols < len) next = idx + cols;
+        else return;
+      }
+      if (next !== idx) onFocusItem(`app-card-${visibleApps[next].id}`);
+    };
+    return () => {
+      navRef.current = null;
+    };
+  }, [visibleApps, focusedId, navRef, onFocusItem]);
 
   const handleLaunch = async (app: TVApp) => {
     if (!app.launchable) {
@@ -297,11 +458,9 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
       const res = await uninstallInstalledApp(target.packageName);
       if (res.mode === 'silent') {
         showToast(`已卸载「${target.name}」`);
-        // 静默卸载不会经过系统界面，主动刷新一次
         window.setTimeout(onRefresh, 400);
       } else {
         showToast('请在系统弹窗中确认卸载，完成后列表会自动刷新');
-        // 系统界面返回后 appStateChange / 广播都会触发刷新，这里再兜一次底
         window.setTimeout(onRefresh, 3500);
       }
       setAppToUninstall(null);
@@ -310,6 +469,57 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
     } finally {
       setIsUninstalling(false);
     }
+  };
+
+  const openAppInfo = async (app: TVApp) => {
+    onCloseMenu();
+    setAppInfo({ app, info: null, loading: true });
+    try {
+      const info = await fetchAppInfo(app.packageName);
+      setAppInfo({ app, info, loading: false });
+    } catch {
+      setAppInfo({ app, info: null, loading: false });
+    }
+  };
+
+  const handleForceStop = async (app: TVApp) => {
+    onCloseMenu();
+    setActionBusy(true);
+    try {
+      const res = await forceStopApp(app.packageName);
+      if (res.mode === 'root') showToast(`已强制停止「${app.name}」`);
+      else showToast(`已打开「${app.name}」的应用信息页，可在此手动强制停止`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '操作失败');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleOpenSettings = async (app: TVApp) => {
+    onCloseMenu();
+    setAppInfo(null);
+    try {
+      await openAppSettings(app.packageName);
+      showToast(`已打开「${app.name}」的应用信息页`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '打开失败');
+    }
+  };
+
+  const isFav = (app: TVApp) => favoritesSet.has(app.packageName);
+  const isHidden = (app: TVApp) => hiddenSet.has(app.packageName);
+
+  const toggleFav = (app: TVApp) => {
+    onToggleFavorite(app.packageName, app.name);
+    onCloseMenu();
+    showToast(isFav(app) ? `已从常用移除「${app.name}」` : `已加入常用「${app.name}」`);
+  };
+
+  const toggleHide = (app: TVApp) => {
+    onToggleHidden(app.packageName, app.name);
+    onCloseMenu();
+    showToast(isHidden(app) ? `已取消隐藏「${app.name}」` : `已隐藏「${app.name}」`);
   };
 
   return (
@@ -438,16 +648,31 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
             <button
               key={c.key}
               onClick={() => setCategory(c.key)}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer ${
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer flex items-center gap-1.5 ${
                 category === c.key
                   ? 'bg-sky-500 text-white border-sky-400'
                   : 'bg-white/5 text-white/65 border-white/10 hover:bg-white/10'
               }`}
             >
+              {c.key === 'fav' && <Star className="w-3 h-3" />}
               {c.label}
-              <span className="ml-1.5 text-[10px] opacity-70">{counts[c.key]}</span>
+              <span className="ml-0.5 text-[10px] opacity-70">{counts[c.key]}</span>
             </button>
           ))}
+
+          {hiddenSet.size > 0 && (
+            <button
+              onClick={() => setShowHidden((v) => !v)}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer flex items-center gap-1.5 ${
+                showHidden
+                  ? 'bg-white/15 text-white border-white/30'
+                  : 'bg-white/5 text-white/65 border-white/10 hover:bg-white/10'
+              }`}
+            >
+              {showHidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              {showHidden ? '隐藏已显示' : `显示已隐藏(${hiddenSet.size})`}
+            </button>
+          )}
 
           <div className="relative ml-auto w-full sm:w-56">
             <Search className="w-3.5 h-3.5 text-white/35 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -496,10 +721,12 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
         </div>
       ) : visibleApps.length === 0 ? (
         <div className="py-20 text-center text-white/45 text-sm">
-          {keyword || category !== 'all' ? '没有符合筛选条件的应用' : '没有读取到应用'}
+          {keyword || category !== 'all'
+            ? '没有符合筛选条件的应用'
+            : '没有读取到应用'}
         </div>
       ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3 md:gap-4">
+        <div ref={gridRef} className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 gap-3 md:gap-4">
           {visibleApps.map((app) => (
             <AppCard
               key={app.id}
@@ -508,7 +735,7 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
               isFocused={focusedId === `app-card-${app.id}`}
               onRequestIcon={onRequestIcon}
               onLaunch={handleLaunch}
-              onAskUninstall={setAppToUninstall}
+              onAskMenu={onAskMenu}
             />
           ))}
         </div>
@@ -516,8 +743,163 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
 
       {visibleApps.length > 0 && (
         <p className="text-[11px] text-white/30 mt-4 text-center">
-          点击图标启动应用 · 点右上角 🗑 卸载 · 系统应用不可卸载
+          点击图标启动 · 点 ⋯ 或长按打开菜单（信息/强制停止/常用/隐藏） · 系统应用不可卸载
         </p>
+      )}
+
+      {/* 操作菜单 */}
+      {appToMenu && (
+        <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-neutral-900 border border-white/20 rounded-3xl p-6 shadow-2xl text-left">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden text-white shrink-0">
+                {icons[appToMenu.packageName] ? (
+                  <img src={icons[appToMenu.packageName]} alt="" className="w-full h-full object-contain" />
+                ) : (
+                  <AppWindow className="w-6 h-6" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-white truncate">{appToMenu.name}</h3>
+                <p className="text-[11px] text-white/40 font-mono truncate">{appToMenu.packageName}</p>
+              </div>
+              <button
+                onClick={onCloseMenu}
+                className="ml-auto p-2 rounded-xl text-white/50 hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <button
+                onClick={() => openAppInfo(appToMenu)}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-white text-sm font-medium transition cursor-pointer"
+              >
+                <Info className="w-4 h-4 text-sky-400" />
+                <span>应用信息</span>
+              </button>
+              <button
+                onClick={() => handleForceStop(appToMenu)}
+                disabled={actionBusy}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-white text-sm font-medium transition cursor-pointer disabled:opacity-50"
+              >
+                <Settings className="w-4 h-4 text-amber-400" />
+                <span>{actionBusy ? '处理中…' : '强制停止'}</span>
+              </button>
+              <button
+                onClick={() => toggleFav(appToMenu)}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-white text-sm font-medium transition cursor-pointer"
+              >
+                {isFav(appToMenu) ? (
+                  <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
+                ) : (
+                  <Star className="w-4 h-4 text-white/60" />
+                )}
+                <span>{isFav(appToMenu) ? '取消常用' : '加入常用'}</span>
+              </button>
+              <button
+                onClick={() => toggleHide(appToMenu)}
+                disabled={appToMenu.isSystem}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-white/5 hover:bg-white/10 text-white text-sm font-medium transition cursor-pointer disabled:opacity-40"
+              >
+                {isHidden(appToMenu) ? (
+                  <Eye className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <Ban className="w-4 h-4 text-white/60" />
+                )}
+                <span>{isHidden(appToMenu) ? '取消隐藏' : '隐藏应用'}</span>
+                {appToMenu.isSystem && <span className="ml-auto text-[10px] text-white/30">系统应用不可隐藏</span>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 应用信息弹窗 */}
+      {appInfo && (
+        <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-neutral-900 border border-white/20 rounded-3xl p-6 shadow-2xl text-left">
+            <div className="flex items-center gap-3 text-sky-400 mb-4">
+              <Info className="w-6 h-6" />
+              <h3 className="text-lg font-bold text-white">应用信息</h3>
+              <button
+                onClick={() => setAppInfo(null)}
+                className="ml-auto p-2 rounded-xl text-white/50 hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {appInfo.loading ? (
+              <div className="py-10 text-center text-white/50 text-sm flex items-center justify-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>正在读取详情…</span>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden text-white shrink-0">
+                    {icons[appInfo.app.packageName] ? (
+                      <img src={icons[appInfo.app.packageName]} alt="" className="w-full h-full object-contain" />
+                    ) : (
+                      <AppWindow className="w-6 h-6" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <h4 className="text-base font-bold text-white truncate">{appInfo.app.name}</h4>
+                    <p className="text-[11px] text-white/40 font-mono truncate">{appInfo.app.packageName}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-white/5 border border-white/10 p-3 space-y-2">
+                  <Row label="版本" value={appInfo.info?.versionName ? `v${appInfo.info.versionName}` : (appInfo.app.version || '未知')} icon={<Package className="w-3.5 h-3.5" />} />
+                  <Row label="安装时间" value={formatDate(appInfo.info?.firstInstallTime)} icon={<Calendar className="w-3.5 h-3.5" />} />
+                  <Row label="更新时间" value={formatDate(appInfo.info?.lastUpdateTime)} icon={<Clock className="w-3.5 h-3.5" />} />
+                  <Row label="权限数量" value={`${appInfo.info?.permissionsCount ?? 0} 项`} icon={<ShieldCheck className="w-3.5 h-3.5" />} />
+                  <Row label="安装包大小" value={formatSize(appInfo.app.sizeMB)} icon={<HardDrive className="w-3.5 h-3.5" />} />
+                  <Row
+                    label="类型"
+                    value={
+                      appInfo.app.isSystem
+                        ? '系统应用'
+                        : appInfo.app.launchable
+                        ? '可启动'
+                        : '无独立界面'
+                    }
+                    icon={<AppWindow className="w-3.5 h-3.5" />}
+                  />
+                  {appInfo.info?.sourceDir && (
+                    <div className="flex items-start justify-between gap-3 text-xs pt-1 border-t border-white/10">
+                      <span className="text-white/45 flex items-center gap-1.5 shrink-0">
+                        <Folder className="w-3.5 h-3.5" /> 路径
+                      </span>
+                      <span className="font-mono text-white/60 text-right break-all">{appInfo.info.sourceDir}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 mt-5">
+                  <button
+                    onClick={() => handleOpenSettings(appInfo.app)}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>打开应用信息页</span>
+                  </button>
+                  <button
+                    onClick={() => handleForceStop(appInfo.app)}
+                    disabled={actionBusy}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 transition cursor-pointer disabled:opacity-50"
+                  >
+                    {actionBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Settings className="w-3.5 h-3.5" />}
+                    <span>强制停止</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* 卸载确认弹窗 */}
@@ -576,3 +958,16 @@ export const AppsLauncher: React.FC<AppsLauncherProps> = ({
     </div>
   );
 };
+
+const Row: React.FC<{ label: string; value: string; icon: React.ReactNode }> = ({
+  label,
+  value,
+  icon,
+}) => (
+  <div className="flex items-center justify-between text-xs">
+    <span className="text-white/45 flex items-center gap-1.5">
+      {icon} {label}
+    </span>
+    <span className="text-white/80 truncate ml-3">{value}</span>
+  </div>
+);
